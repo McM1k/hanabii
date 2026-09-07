@@ -168,6 +168,9 @@ pub fn GameBoard() -> impl IntoView {
     let ctx = use_context::<AppContext>().expect("AppContext should be provided by App");
 
     let (selected_target, set_selected_target) = create_signal(None::<PlayerId>);
+    // Tracks whether a card is currently being dragged, so the play/discard
+    // drop zones can highlight themselves while a drag is in progress.
+    let (is_dragging, set_is_dragging) = create_signal(false);
 
     view! {
         <div class="game-board">
@@ -190,21 +193,18 @@ pub fn GameBoard() -> impl IntoView {
                         .unwrap_or_else(|| format!("Player {}", id.0))
                 };
 
-                let status_line = match view.status {
-                    GameStatus::InProgress => {
-                        if is_my_turn {
-                            "Your turn.".to_string()
-                        } else {
-                            format!("{}'s turn.", name_of(view.current_turn))
-                        }
-                    }
+                // Only set for the game-over message; while the game is in
+                // progress, whose turn it is is already shown atop the hand
+                // list ("Now playing"), so no separate line is needed here.
+                let status_line: Option<String> = match view.status {
+                    GameStatus::InProgress => None,
                     GameStatus::Finished(reason) => {
                         let why = match reason {
                             EndReason::FusesExhausted => "ran out of fuses",
                             EndReason::DeckExhausted => "the deck ran out",
                             EndReason::PerfectScore => "a perfect score",
                         };
-                        format!("Game over — {why}. Final score: {}/25", view.score)
+                        Some(format!("Game over — {why}. Final score: {}/25", view.score))
                     }
                 };
 
@@ -306,6 +306,10 @@ pub fn GameBoard() -> impl IntoView {
                                                 if let Some(dt) = ev.data_transfer() {
                                                     let _ = dt.set_data("text/plain", &card_id.0.to_string());
                                                 }
+                                                set_is_dragging.set(true);
+                                            }
+                                            on:dragend=move |_ev: web_sys::DragEvent| {
+                                                set_is_dragging.set(false);
                                             }
                                         >
                                             <span class="card-hint">{hint}</span>
@@ -419,13 +423,22 @@ pub fn GameBoard() -> impl IntoView {
 
                 view! {
                     <div>
-                        <p class="status-line">{status_line}</p>
+                        {status_line.map(|line| view! { <p class="status-line">{line}</p> })}
 
                         <div
-                            class=if can_act { "panel drop-zone".to_string() } else { "panel drop-zone disabled".to_string() }
+                            class=move || {
+                                let mut classes = vec!["panel", "drop-zone"];
+                                if !can_act {
+                                    classes.push("disabled");
+                                } else if is_dragging.get() {
+                                    classes.push("drag-active");
+                                }
+                                classes.join(" ")
+                            }
                             on:dragover=move |ev: web_sys::DragEvent| ev.prevent_default()
                             on:drop=move |ev: web_sys::DragEvent| {
                                 ev.prevent_default();
+                                set_is_dragging.set(false);
                                 if let Some(card_id) = dragged_card_id(&ev) {
                                     ctx.send(ClientMessage::Action(Action::Play { card_id }));
                                 }
@@ -441,10 +454,19 @@ pub fn GameBoard() -> impl IntoView {
                         </div>
 
                         <div
-                            class=if can_discard { "panel drop-zone".to_string() } else { "panel drop-zone disabled".to_string() }
+                            class=move || {
+                                let mut classes = vec!["panel", "drop-zone"];
+                                if !can_discard {
+                                    classes.push("disabled");
+                                } else if is_dragging.get() {
+                                    classes.push("drag-active");
+                                }
+                                classes.join(" ")
+                            }
                             on:dragover=move |ev: web_sys::DragEvent| ev.prevent_default()
                             on:drop=move |ev: web_sys::DragEvent| {
                                 ev.prevent_default();
+                                set_is_dragging.set(false);
                                 if let Some(card_id) = dragged_card_id(&ev) {
                                     ctx.send(ClientMessage::Action(Action::Discard { card_id }));
                                 }
