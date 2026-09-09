@@ -12,7 +12,6 @@
   --yellow-fw: #e8b647;
   --green-fw: #4c9a6a;
   --blue-fw: #3e7cb1;
-  --multicolor-fw: #b47fe0;
 }
 
 * {
@@ -223,9 +222,17 @@ button:disabled {
 .firework-blue .firework-burst {
   color: var(--blue-fw);
 }
+.firework-multicolor {
+  /* Same treatment as .card-multicolor — a flat swatch can't represent
+     "every color", so match the card tiles' gradient instead of picking
+     an arbitrary solid accent. */
+  background: linear-gradient(135deg, var(--red-fw), var(--yellow-fw), var(--green-fw), var(--blue-fw));
+  border-color: transparent;
+}
+.firework-multicolor .firework-label,
 .firework-multicolor .firework-value,
 .firework-multicolor .firework-burst {
-  color: var(--multicolor-fw);
+  color: var(--night);
 }
 
 .tokens {

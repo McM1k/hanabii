@@ -489,7 +489,9 @@ fn ready_board(
                                             // clues — no real single-colored
                                             // card could do that, so this is
                                             // a hard deduction, not a guess.
-                                            parts.push("Multicolor".to_string());
+                                            // Abbreviated: the card is too
+                                            // narrow to fit "Multicolor".
+                                            parts.push("Multi".to_string());
                                         } else if let Some(color) = c.knowledge.known_color {
                                             parts.push(format!("{color:?}"));
                                         }
