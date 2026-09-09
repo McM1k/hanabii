@@ -202,33 +202,54 @@ button:disabled {
   margin: 0.15rem auto;
 }
 
-.firework-white .firework-value,
-.firework-white .firework-burst {
-  color: var(--white-fw);
-}
-.firework-red .firework-value,
-.firework-red .firework-burst {
-  color: var(--red-fw);
-}
-.firework-yellow .firework-value,
-.firework-yellow .firework-burst {
-  color: var(--yellow-fw);
-}
-.firework-green .firework-value,
-.firework-green .firework-burst {
-  color: var(--green-fw);
-}
-.firework-blue .firework-value,
-.firework-blue .firework-burst {
-  color: var(--blue-fw);
-}
+/* Every firework tile is filled with its own color rather than just tinting
+   the label/value/icon — dark text throughout reads clearly against all six
+   swatches, including the multicolor gradient below. */
+.firework-white,
+.firework-red,
+.firework-yellow,
+.firework-green,
+.firework-blue,
 .firework-multicolor {
-  /* Same treatment as .card-multicolor — a flat swatch can't represent
-     "every color", so match the card tiles' gradient instead of picking
-     an arbitrary solid accent. */
-  background: linear-gradient(135deg, var(--red-fw), var(--yellow-fw), var(--green-fw), var(--blue-fw));
   border-color: transparent;
 }
+.firework-white {
+  background: var(--white-fw);
+}
+.firework-red {
+  background: var(--red-fw);
+}
+.firework-yellow {
+  background: var(--yellow-fw);
+}
+.firework-green {
+  background: var(--green-fw);
+}
+.firework-blue {
+  background: var(--blue-fw);
+}
+.firework-multicolor {
+  /* Same idea as .card-multicolor — a flat swatch can't represent "every
+     color", so match the card tiles' gradient instead of picking an
+     arbitrary solid accent. */
+  background: linear-gradient(135deg, var(--red-fw), var(--yellow-fw), var(--green-fw), var(--blue-fw));
+}
+
+.firework-white .firework-label,
+.firework-white .firework-value,
+.firework-white .firework-burst,
+.firework-red .firework-label,
+.firework-red .firework-value,
+.firework-red .firework-burst,
+.firework-yellow .firework-label,
+.firework-yellow .firework-value,
+.firework-yellow .firework-burst,
+.firework-green .firework-label,
+.firework-green .firework-value,
+.firework-green .firework-burst,
+.firework-blue .firework-label,
+.firework-blue .firework-value,
+.firework-blue .firework-burst,
 .firework-multicolor .firework-label,
 .firework-multicolor .firework-value,
 .firework-multicolor .firework-burst {
