@@ -269,11 +269,21 @@ button:disabled {
 /* --- cards --- */
 
 .hand {
+  display: flex;
+  align-items: flex-start;
+  gap: 1rem;
   padding: 0.75rem;
   margin-bottom: 1.25rem;
   border: 1px solid transparent;
   border-radius: 4px;
   will-change: transform;
+}
+
+.hand-main {
+  flex: 1;
+  /* Let the card row actually wrap/shrink inside the flex layout instead
+     of forcing .hand wider than its container. */
+  min-width: 0;
 }
 
 .hand:last-child {
@@ -345,15 +355,20 @@ button:disabled {
 }
 
 .clue-options {
-  margin-top: 0.75rem;
-  padding-top: 0.75rem;
-  border-top: 1px solid var(--night-softer);
+  flex-shrink: 0;
+  padding-left: 0.9rem;
+  border-left: 1px solid var(--night-softer);
 }
 
 .clue-buttons {
   display: flex;
   flex-wrap: wrap;
   gap: 0.4rem;
+}
+
+/* Colors on one line, numbers on the next. */
+.clue-buttons + .clue-buttons {
+  margin-top: 0.4rem;
 }
 
 .clue-btn {
@@ -491,4 +506,20 @@ button:disabled {
   font-size: 0.8rem;
   color: var(--paper-dim);
   font-style: italic;
+}
+
+/* Below this width there isn't room for the clue panel beside the hand
+   without squeezing the card row — fall back to stacking it underneath. */
+@media (max-width: 520px) {
+  .hand {
+    flex-direction: column;
+  }
+
+  .clue-options {
+    flex-shrink: 1;
+    padding-left: 0;
+    padding-top: 0.75rem;
+    border-left: none;
+    border-top: 1px solid var(--night-softer);
+  }
 }

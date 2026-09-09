@@ -594,7 +594,8 @@ fn ready_board(
                             Some(view! {
                                 <div class="clue-options">
                                     <p class="hint">"Give a clue:"</p>
-                                    <div class="clue-buttons">{color_buttons}{number_buttons}</div>
+                                    <div class="clue-buttons">{color_buttons}</div>
+                                    <div class="clue-buttons">{number_buttons}</div>
                                 </div>
                             })
                         };
@@ -602,33 +603,37 @@ fn ready_board(
                         if is_you {
                             view! {
                                 <div class=hand_class _ref=node_ref>
-                                    <div class="hand-header">
-                                        <h3>"Your hand"</h3>
-                                        {now_playing}
-                                        {last_move_line}
+                                    <div class="hand-main">
+                                        <div class="hand-header">
+                                            <h3>"Your hand"</h3>
+                                            {now_playing}
+                                            {last_move_line}
+                                        </div>
+                                        <ul class="cards">{card_items}</ul>
                                     </div>
-                                    <ul class="cards">{card_items}</ul>
                                 </div>
                             }
                             .into_view()
                         } else {
                             view! {
                                 <div class=hand_class _ref=node_ref>
-                                    <div class="hand-header">
-                                        <h3
-                                            class="player-name"
-                                            on:click=move |_| {
-                                                set_selected_target.update(|t| {
-                                                    *t = if *t == Some(pid) { None } else { Some(pid) };
-                                                });
-                                            }
-                                        >
-                                            {name_of(pid)}
-                                        </h3>
-                                        {now_playing}
-                                        {last_move_line}
+                                    <div class="hand-main">
+                                        <div class="hand-header">
+                                            <h3
+                                                class="player-name"
+                                                on:click=move |_| {
+                                                    set_selected_target.update(|t| {
+                                                        *t = if *t == Some(pid) { None } else { Some(pid) };
+                                                    });
+                                                }
+                                            >
+                                                {name_of(pid)}
+                                            </h3>
+                                            {now_playing}
+                                            {last_move_line}
+                                        </div>
+                                        <ul class="cards">{card_items}</ul>
                                     </div>
-                                    <ul class="cards">{card_items}</ul>
                                     {clue_section}
                                 </div>
                             }
