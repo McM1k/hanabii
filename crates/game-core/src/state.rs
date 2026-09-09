@@ -534,6 +534,68 @@ mod tests {
     }
 
     #[test]
+    fn two_different_color_clues_on_the_same_card_reveal_it_as_multicolor() {
+        let mut g = GameState::new(2, 42, GameRules { multicolor: true });
+        g.hands.get_mut(&PlayerId(1)).unwrap()[0].card = Card {
+            color: Color::Multicolor,
+            number: 3,
+        };
+        // Pinned so the "pass the turn back" clue below is guaranteed to
+        // touch something, regardless of what the seed happened to deal.
+        g.hands.get_mut(&PlayerId(0)).unwrap()[0].card = Card {
+            color: Color::Red,
+            number: 1,
+        };
+        let card_id = g.hands[&PlayerId(1)][0].id;
+
+        // Turn 1: clue the multicolor card about Green.
+        g.apply_action(
+            PlayerId(0),
+            Action::Clue {
+                target: PlayerId(1),
+                clue: Clue::Color(Color::Green),
+            },
+        )
+        .unwrap();
+        let knowledge_after_one_clue = &g.hands[&PlayerId(1)]
+            .iter()
+            .find(|hc| hc.id == card_id)
+            .unwrap()
+            .knowledge;
+        assert!(!knowledge_after_one_clue.inferred_multicolor());
+
+        // Turn 2: just pass the turn back.
+        g.apply_action(
+            PlayerId(1),
+            Action::Clue {
+                target: PlayerId(0),
+                clue: Clue::Number(1),
+            },
+        )
+        .unwrap();
+
+        // Turn 3: clue the same card again, this time about a *different*
+        // color — only the multicolor suit could match both.
+        g.apply_action(
+            PlayerId(0),
+            Action::Clue {
+                target: PlayerId(1),
+                clue: Clue::Color(Color::White),
+            },
+        )
+        .unwrap();
+
+        let knowledge = &g.hands[&PlayerId(1)]
+            .iter()
+            .find(|hc| hc.id == card_id)
+            .unwrap()
+            .knowledge;
+        assert!(knowledge.inferred_multicolor());
+        // The most-recently-clued color is still tracked too.
+        assert_eq!(knowledge.known_color, Some(Color::White));
+    }
+
+    #[test]
     fn cannot_clue_yourself() {
         let mut g = two_player_game();
         let result = g.apply_action(

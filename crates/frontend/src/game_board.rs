@@ -484,7 +484,13 @@ fn ready_board(
                                     .iter()
                                     .map(|c| {
                                         let mut parts = Vec::new();
-                                        if let Some(color) = c.knowledge.known_color {
+                                        if c.knowledge.inferred_multicolor() {
+                                            // Matched two *different* color
+                                            // clues — no real single-colored
+                                            // card could do that, so this is
+                                            // a hard deduction, not a guess.
+                                            parts.push("Multicolor".to_string());
+                                        } else if let Some(color) = c.knowledge.known_color {
                                             parts.push(format!("{color:?}"));
                                         }
                                         if let Some(number) = c.knowledge.known_number {

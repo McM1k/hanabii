@@ -15,12 +15,19 @@ pub struct CardKnowledge {
     pub known_number: Option<Number>,
     pub not_colors: HashSet<Color>,
     pub not_numbers: HashSet<Number>,
+    /// Every *distinct* color a color clue has positively touched this card
+    /// with. Almost always has at most one entry (a card only ever matches
+    /// clues of its own color) — but see `inferred_multicolor`.
+    pub clued_colors: HashSet<Color>,
 }
 
 impl CardKnowledge {
     pub fn apply_positive(&mut self, clue: Clue) {
         match clue {
-            Clue::Color(c) => self.known_color = Some(c),
+            Clue::Color(c) => {
+                self.known_color = Some(c);
+                self.clued_colors.insert(c);
+            }
             Clue::Number(n) => self.known_number = Some(n),
         }
     }
@@ -34,6 +41,15 @@ impl CardKnowledge {
                 self.not_numbers.insert(n);
             }
         }
+    }
+
+    /// True once two or more *different* color clues have touched this
+    /// card. A real single-colored card can only ever match clues of its
+    /// own color, so matching two different ones is only possible for the
+    /// multicolor suit — this is a hard deduction from the clue history,
+    /// not a guess, and holds however the card knowledge was assembled.
+    pub fn inferred_multicolor(&self) -> bool {
+        self.clued_colors.len() > 1
     }
 }
 
@@ -57,5 +73,24 @@ mod tests {
         assert!(k.not_numbers.contains(&1));
         assert!(k.not_numbers.contains(&2));
         assert!(!k.not_numbers.contains(&3));
+    }
+
+    #[test]
+    fn two_different_color_clues_imply_multicolor() {
+        let mut k = CardKnowledge::default();
+        k.apply_positive(Clue::Color(Color::Red));
+        assert!(!k.inferred_multicolor());
+        k.apply_positive(Clue::Color(Color::Blue));
+        assert!(k.inferred_multicolor());
+        // known_color tracks the most recent clue regardless.
+        assert_eq!(k.known_color, Some(Color::Blue));
+    }
+
+    #[test]
+    fn repeating_the_same_color_clue_does_not_imply_multicolor() {
+        let mut k = CardKnowledge::default();
+        k.apply_positive(Clue::Color(Color::Red));
+        k.apply_positive(Clue::Color(Color::Red));
+        assert!(!k.inferred_multicolor());
     }
 }
