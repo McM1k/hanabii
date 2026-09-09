@@ -281,6 +281,20 @@ fn ready_board(
         });
     }
 
+    // Whoever was selected as a clue target only makes sense for the turn
+    // during which they were picked — once the turn moves on (for any
+    // reason: a clue given, a play, a discard), clear it so the next turn
+    // starts without a stale target and its clue panel still showing.
+    create_effect(move |prev_turn: Option<PlayerId>| match ctx.view.get() {
+        Some(view) => {
+            if prev_turn.is_some_and(|prev| prev != view.current_turn) {
+                set_selected_target.set(None);
+            }
+            view.current_turn
+        }
+        None => prev_turn.unwrap_or(you),
+    });
+
     let coarse = move || {
         let Some(view) = ctx.view.get() else {
             return Vec::<View>::new().into_view();
