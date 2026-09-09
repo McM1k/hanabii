@@ -202,6 +202,8 @@ fn ready_board(
     set_selected_target: WriteSignal<Option<PlayerId>>,
     is_dragging: ReadSignal<bool>,
     set_is_dragging: WriteSignal<bool>,
+    hovered_clue: ReadSignal<Option<Clue>>,
+    set_hovered_clue: WriteSignal<Option<Clue>>,
 ) -> impl IntoView {
     let initial = ctx
         .view
@@ -526,12 +528,34 @@ fn ready_board(
                                     })
                                     .collect_view()
                             } else {
+                                // Only preview a hover on the hand the clue
+                                // buttons actually belong to — other hands
+                                // may coincidentally share a color/number
+                                // but aren't what's about to be clued.
+                                let preview_clue = if selected_target.get() == Some(pid) {
+                                    hovered_clue.get()
+                                } else {
+                                    None
+                                };
                                 cards
                                     .iter()
                                     .map(|c| {
                                         let card = c.card.expect("other players' cards are always visible");
+                                        let is_targeted = preview_clue
+                                            .map(|clue| match clue {
+                                                Clue::Color(clue_color) => {
+                                                    card.color == clue_color || card.color == Color::Multicolor
+                                                }
+                                                Clue::Number(n) => card.number == n,
+                                            })
+                                            .unwrap_or(false);
+                                        let class = if is_targeted {
+                                            format!("card card-{} card-clue-target", color_class(card.color))
+                                        } else {
+                                            format!("card card-{}", color_class(card.color))
+                                        };
                                         view! {
-                                            <li class=format!("card card-{}", color_class(card.color))>
+                                            <li class=class>
                                                 {card.number.to_string()}
                                             </li>
                                         }
@@ -559,6 +583,10 @@ fn ready_board(
                                         <button
                                             class=format!("clue-btn card-{}", color_class(color))
                                             disabled=!can_clue
+                                            on:mouseenter=move |_| {
+                                                set_hovered_clue.set(Some(Clue::Color(color)));
+                                            }
+                                            on:mouseleave=move |_| set_hovered_clue.set(None)
                                             on:click=move |_| {
                                                 ctx.send(ClientMessage::Action(Action::Clue {
                                                     target: pid,
@@ -578,6 +606,10 @@ fn ready_board(
                                         <button
                                             class="clue-btn"
                                             disabled=!can_clue
+                                            on:mouseenter=move |_| {
+                                                set_hovered_clue.set(Some(Clue::Number(number)));
+                                            }
+                                            on:mouseleave=move |_| set_hovered_clue.set(None)
                                             on:click=move |_| {
                                                 ctx.send(ClientMessage::Action(Action::Clue {
                                                     target: pid,
@@ -654,6 +686,9 @@ pub fn GameBoard() -> impl IntoView {
     // Tracks whether a card is currently being dragged, so the play/discard
     // drop zones can highlight themselves while a drag is in progress.
     let (is_dragging, set_is_dragging) = create_signal(false);
+    // Which clue button (if any) is currently being hovered, so the cards
+    // it would touch can be outlined as a preview before it's actually given.
+    let (hovered_clue, set_hovered_clue) = create_signal(None::<Clue>);
 
     view! {
         <div class="game-board">
@@ -661,7 +696,17 @@ pub fn GameBoard() -> impl IntoView {
                 when=move || ctx.view.with(Option::is_some)
                 fallback=|| view! { <p>"Waiting for the game to start…"</p> }
             >
-                {move || ready_board(ctx, selected_target, set_selected_target, is_dragging, set_is_dragging)}
+                {move || {
+                    ready_board(
+                        ctx,
+                        selected_target,
+                        set_selected_target,
+                        is_dragging,
+                        set_is_dragging,
+                        hovered_clue,
+                        set_hovered_clue,
+                    )
+                }}
             </Show>
         </div>
     }
