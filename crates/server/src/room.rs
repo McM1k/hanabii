@@ -1,4 +1,4 @@
-use game_core::{Action, ActionError, GameState, PlayerId, ServerMessage};
+use game_core::{Action, ActionError, GameRules, GameState, PlayerId, ServerMessage};
 use tokio::sync::mpsc;
 
 pub struct Seat {
@@ -24,6 +24,10 @@ pub enum StartError {
 pub struct Room {
     pub seats: Vec<Seat>,
     pub game: Option<GameState>,
+    /// Variant rules selected in the lobby, applied when the game starts.
+    /// Any seated player can change this up until then (same "no host"
+    /// model as starting the game itself).
+    pub rules: GameRules,
 }
 
 impl Room {
@@ -81,7 +85,7 @@ impl Room {
             .map(|d| d.as_nanos() as u64)
             .unwrap_or(0);
 
-        self.game = Some(GameState::new(self.seats.len() as u8, seed));
+        self.game = Some(GameState::new(self.seats.len() as u8, seed, self.rules));
         Ok(())
     }
 

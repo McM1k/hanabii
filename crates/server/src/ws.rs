@@ -61,6 +61,7 @@ async fn handle_socket(mut socket: WebSocket, state: Arc<AppState>) {
             let _ = tx.send(ServerMessage::Joined {
                 you: id,
                 players: roster,
+                rules: room_guard.rules,
             });
             room_guard.broadcast_except(
                 id,
@@ -134,6 +135,15 @@ fn handle_client_message(room: &Arc<Mutex<Room>>, player_id: PlayerId, msg: Clie
     match msg {
         ClientMessage::Join { .. } => {
             // Already joined on this connection; a second Join is ignored.
+        }
+        ClientMessage::SetRules { rules } => {
+            // Lobby-only; a stray SetRules after the game has started is
+            // just ignored rather than erroring, same tolerant handling as
+            // a repeated Join above.
+            if room_guard.game.is_none() {
+                room_guard.rules = rules;
+                room_guard.broadcast(&ServerMessage::RulesUpdated { rules });
+            }
         }
         ClientMessage::StartGame => match room_guard.start_game() {
             Ok(()) => {

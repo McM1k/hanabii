@@ -3,7 +3,7 @@ use futures::{SinkExt, StreamExt};
 use gloo_net::websocket::{futures::WebSocket, Message};
 use leptos::*;
 
-use game_core::{ClientMessage, PlayerId, PlayerView, ServerMessage};
+use game_core::{ClientMessage, GameRules, PlayerId, PlayerView, ServerMessage};
 
 const SERVER_URL: &str = "ws://localhost:3000/ws";
 
@@ -19,6 +19,10 @@ pub struct AppContext {
     pub view: RwSignal<Option<PlayerView>>,
     pub status: RwSignal<String>,
     pub game_started: RwSignal<bool>,
+    /// The room's currently-selected variant rules. Live in the lobby (any
+    /// seat can toggle these, synced via `RulesUpdated`); frozen for the
+    /// rest of the game once `GameStarted` arrives.
+    pub rules: RwSignal<GameRules>,
     outbound: RwSignal<Option<mpsc::UnboundedSender<ClientMessage>>>,
 }
 
@@ -30,6 +34,7 @@ impl AppContext {
             view: create_rw_signal(None),
             status: create_rw_signal(String::new()),
             game_started: create_rw_signal(false),
+            rules: create_rw_signal(GameRules::default()),
             outbound: create_rw_signal(None),
         }
     }
@@ -104,15 +109,19 @@ pub fn connect(ctx: AppContext, room_code: String, name: String) {
 
 fn apply_server_message(ctx: AppContext, msg: ServerMessage) {
     match msg {
-        ServerMessage::Joined { you, players } => {
+        ServerMessage::Joined { you, players, rules } => {
             ctx.my_id.set(Some(you));
             ctx.roster.set(players);
+            ctx.rules.set(rules);
         }
         ServerMessage::PlayerJoined { player_id, name } => {
             ctx.roster.update(|r| r.push((player_id, name)));
         }
         ServerMessage::PlayerLeft { player_id } => {
             ctx.roster.update(|r| r.retain(|(id, _)| *id != player_id));
+        }
+        ServerMessage::RulesUpdated { rules } => {
+            ctx.rules.set(rules);
         }
         ServerMessage::GameStarted => {
             ctx.game_started.set(true);

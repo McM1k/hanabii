@@ -6,6 +6,7 @@ use crate::card::{Card, CardId, Clue, Color, Number};
 use crate::deck::shuffled_deck;
 use crate::knowledge::CardKnowledge;
 use crate::player::PlayerId;
+use crate::rules::GameRules;
 
 pub const MAX_CLUE_TOKENS: u8 = 8;
 pub const MAX_FUSE_TOKENS: u8 = 3;
@@ -64,6 +65,9 @@ pub enum ActionError {
     NoClueTokens,
     CannotClueSelf,
     UnknownPlayer,
+    /// The multicolor suit can never be clued directly, even when the
+    /// multicolor rule is on — only the five base colors can.
+    CannotClueMulticolor,
     ClueMatchesNothing,
     CardNotInHand,
     CannotDiscardAtMaxClues,
@@ -111,11 +115,12 @@ pub struct GameState {
     pub status: GameStatus,
     pub final_round_starting_player: Option<usize>,
     pub last_moves: HashMap<PlayerId, LastMove>,
+    pub rules: GameRules,
     next_card_id: u32,
 }
 
 impl GameState {
-    pub fn new(player_count: u8, seed: u64) -> Self {
+    pub fn new(player_count: u8, seed: u64, rules: GameRules) -> Self {
         assert!(
             (2..=5).contains(&player_count),
             "Hanabi supports 2-5 players"
@@ -123,7 +128,7 @@ impl GameState {
         let players: Vec<PlayerId> = (0..player_count).map(PlayerId).collect();
         let hand_size = if player_count <= 3 { 5 } else { 4 };
 
-        let mut draw_pile = shuffled_deck(seed);
+        let mut draw_pile = shuffled_deck(seed, &rules);
         let mut hands = HashMap::new();
         let mut next_card_id = 0u32;
 
@@ -143,7 +148,8 @@ impl GameState {
             hands.insert(p, hand);
         }
 
-        let fireworks: HashMap<Color, Number> = Color::ALL.iter().map(|&c| (c, 0)).collect();
+        let fireworks: HashMap<Color, Number> =
+            rules.active_colors().into_iter().map(|c| (c, 0)).collect();
 
         GameState {
             players,
@@ -157,6 +163,7 @@ impl GameState {
             status: GameStatus::InProgress,
             final_round_starting_player: None,
             last_moves: HashMap::new(),
+            rules,
             next_card_id,
         }
     }
@@ -208,6 +215,12 @@ impl GameState {
         if self.player_index(target).is_none() {
             return Err(ActionError::UnknownPlayer);
         }
+        if matches!(clue, Clue::Color(Color::Multicolor)) {
+            // Standard multicolor-suit rule: it's wild when *receiving* a
+            // clue (see the is_match arm below), but can never be the color
+            // named in a clue.
+            return Err(ActionError::CannotClueMulticolor);
+        }
         if self.clue_tokens == 0 {
             return Err(ActionError::NoClueTokens);
         }
@@ -222,7 +235,10 @@ impl GameState {
 
         for hc in hand.iter_mut() {
             let is_match = match clue {
-                Clue::Color(c) => hc.card.color == c,
+                // A multicolor card counts as every color for clue-matching
+                // purposes, so a "Red" clue touches actual red cards *and*
+                // any multicolor cards in the hand.
+                Clue::Color(c) => hc.card.color == c || hc.card.color == Color::Multicolor,
                 Clue::Number(n) => hc.card.number == n,
             };
             if is_match {
@@ -400,16 +416,16 @@ mod tests {
     use super::*;
 
     fn two_player_game() -> GameState {
-        GameState::new(2, 42)
+        GameState::new(2, 42, GameRules::default())
     }
 
     #[test]
     fn deals_correct_hand_sizes() {
-        let g2 = GameState::new(2, 1);
+        let g2 = GameState::new(2, 1, GameRules::default());
         assert_eq!(g2.hands[&PlayerId(0)].len(), 5);
         assert_eq!(g2.hands[&PlayerId(1)].len(), 5);
 
-        let g4 = GameState::new(4, 1);
+        let g4 = GameState::new(4, 1, GameRules::default());
         for p in &g4.players {
             assert_eq!(g4.hands[p].len(), 4);
         }
@@ -417,9 +433,18 @@ mod tests {
 
     #[test]
     fn dealt_plus_draw_pile_equals_fifty() {
-        let g = GameState::new(3, 7);
+        let g = GameState::new(3, 7, GameRules::default());
         let dealt: usize = g.hands.values().map(|h| h.len()).sum();
         assert_eq!(dealt + g.draw_pile.len(), 50);
+    }
+
+    #[test]
+    fn multicolor_rule_deals_from_a_sixty_card_deck() {
+        let g = GameState::new(3, 7, GameRules { multicolor: true });
+        let dealt: usize = g.hands.values().map(|h| h.len()).sum();
+        assert_eq!(dealt + g.draw_pile.len(), 60);
+        assert_eq!(g.fireworks.len(), 6);
+        assert_eq!(g.fireworks.get(&Color::Multicolor), Some(&0));
     }
 
     #[test]
@@ -460,6 +485,52 @@ mod tests {
         assert_eq!(g.clue_tokens, MAX_CLUE_TOKENS - 1);
         let updated = &g.hands[&PlayerId(1)][0];
         assert_eq!(updated.knowledge.known_color, Some(target_card.card.color));
+    }
+
+    #[test]
+    fn multicolor_card_is_touched_by_any_color_clue() {
+        let mut g = GameState::new(2, 42, GameRules { multicolor: true });
+        g.hands.get_mut(&PlayerId(1)).unwrap()[0].card = Card {
+            color: Color::Multicolor,
+            number: 2,
+        };
+        let multi_card_id = g.hands[&PlayerId(1)][0].id;
+
+        let events = g
+            .apply_action(
+                PlayerId(0),
+                Action::Clue {
+                    target: PlayerId(1),
+                    clue: Clue::Color(Color::Green),
+                },
+            )
+            .unwrap();
+
+        match &events[0] {
+            Event::ClueGiven { touched, .. } => assert!(touched.contains(&multi_card_id)),
+            other => panic!("expected a ClueGiven event, got {other:?}"),
+        }
+        let knowledge = &g.hands[&PlayerId(1)]
+            .iter()
+            .find(|hc| hc.id == multi_card_id)
+            .unwrap()
+            .knowledge;
+        // The clued color is recorded even though the card is actually
+        // multicolor — that ambiguity is the whole point of the variant.
+        assert_eq!(knowledge.known_color, Some(Color::Green));
+    }
+
+    #[test]
+    fn cannot_clue_multicolor_directly() {
+        let mut g = GameState::new(2, 42, GameRules { multicolor: true });
+        let result = g.apply_action(
+            PlayerId(0),
+            Action::Clue {
+                target: PlayerId(1),
+                clue: Clue::Color(Color::Multicolor),
+            },
+        );
+        assert_eq!(result.unwrap_err(), ActionError::CannotClueMulticolor);
     }
 
     #[test]

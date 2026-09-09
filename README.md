@@ -5,14 +5,16 @@ Axum for the server, Leptos (WASM) for the frontend, WebSockets tying them toget
 
 ## Status
 
-- [x] `game-core` — the rules engine. Compiler-verified, 18/18 tests passing.
-- [x] `server` — Axum + WebSockets, room management. Compiler-verified, runs, join
-      flow tested manually.
+- [x] `game-core` — the rules engine. Compiler-verified, 29/29 tests passing.
+- [x] `server` — Axum + WebSockets, room management. Compiler-verified, 6/6 tests
+      passing, join flow tested manually.
 - [x] `frontend` — Leptos UI. Written, **not yet compiler-verified**. This is the
       riskiest crate in the project — Leptos's reactive/view-macro API and the
       `gloo-net` WebSocket client are areas I have real uncertainty about, more
-      than anything in `game-core` or `server`. Expect this one to take a couple
-      of rounds of fixes.
+      than anything in `game-core` or `server`. The hand-swap animation
+      (`<For>` + a hand-rolled FLIP effect in `game_board.rs`) is the single
+      riskiest piece added so far — real DOM measurement code I can't run in my
+      sandbox. Expect this one to take a couple of rounds of fixes.
 
 ## Running everything
 
@@ -111,9 +113,15 @@ hanabi/
   always who plays next, and a small "Now playing" badge reinforces it.
 - **Hand cards are smaller** (2.3rem × 3.1rem, down from 3rem × 4rem) while staying
   rectangular, and the current-turn hand gets a brief highlight animation when it
-  becomes someone's turn — CSS-only, no new Rust logic, and works naturally because
-  each hand block is a freshly-rendered DOM node every turn rather than a persistent
-  one being toggled.
+  becomes someone's turn — driven by a CSS class toggle that re-triggers correctly
+  even though the underlying hand blocks are now persistent DOM nodes (see below).
+- **The turn-ordered hand list animates players swapping position** when the turn
+  passes: each hand is a persistent DOM node (rendered via `<For>`, keyed by
+  `PlayerId`, instead of being torn down and rebuilt every state update) so a
+  hand-rolled FLIP effect can measure its old and new position and slide it there
+  with a CSS transform transition, rather than the list just popping into its new
+  order. No animation library — just `get_bounding_client_rect` + a forced reflow
+  + a `transition`, in `game_board.rs`.
 - **Fireworks show a progressively-revealed burst icon per color**, in the same
   spirit as the physical game's cards — where laying a suit's cards out in order
   reveals more of a small illustration. This is an original SVG design (not a
@@ -135,7 +143,11 @@ hanabi/
   only bright accents (they're the actual fireworks, not arbitrary brand colors), cards
   render as color-filled tiles rather than generic rounded chips, clue/fuse tokens as
   pip rows (●○) rather than "6/8" text.
-- **Standard rules only, for now.** Tweaks are still TBD.
+- **Variant rules are opt-in, chosen in the lobby before the game starts.** Any
+  seated player can toggle them (`GameRules`, synced to everyone via `SetRules` /
+  `RulesUpdated`); the server freezes whatever's selected into the `GameState` at
+  `StartGame` and it can't change mid-game. First (and so far only) rule:
+  **multicolor suit** — see below.
 
 ## Standard rules implemented
 
@@ -147,9 +159,20 @@ hanabi/
 - Completing a firework (playing a 5) refunds a clue token
 - Game ends on: 3 fuses lost, all 5 fireworks completed, or one full round after the deck empties
 
+## Optional rules
+
+- **Multicolor suit** (`GameRules { multicolor: true }`, toggled in the lobby):
+  adds a 6th, 10-card suit on top of the standard 50. Multicolor cards count as
+  *every* color when receiving a color clue (so a "Red" clue also touches them),
+  but the multicolor suit itself can never be the color named in a clue — same
+  as the standard tabletop variant. Builds its own separate firework, so max
+  score becomes 30 instead of 25.
+
 ## Server protocol (v1)
 
-A client connects to `/ws`, and the *first* message must be a `Join`. Everything
-after that is either `StartGame` (any seated player, once 2+ have joined) or
-`Action` (a normal game move). See `game-core/src/messages.rs` for the exact
-`ClientMessage` / `ServerMessage` shapes.
+A client connects to `/ws`, and the *first* message must be a `Join`. After that,
+before the game starts, a seated player can send `SetRules` to change the room's
+selected variant rules (echoed to everyone as `RulesUpdated`) or `StartGame` (any
+seated player, once 2+ have joined) to lock in the current rules and begin.
+Once running, `Action` carries normal game moves. See `game-core/src/messages.rs`
+for the exact `ClientMessage` / `ServerMessage` shapes.

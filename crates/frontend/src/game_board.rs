@@ -1,3 +1,8 @@
+use std::cell::RefCell;
+use std::collections::HashMap;
+use std::rc::Rc;
+
+use leptos::html::Div;
 use leptos::*;
 
 use game_core::{
@@ -14,6 +19,7 @@ fn color_class(c: Color) -> &'static str {
         Color::Yellow => "yellow",
         Color::Green => "green",
         Color::Blue => "blue",
+        Color::Multicolor => "multicolor",
     }
 }
 
@@ -33,10 +39,25 @@ fn dragged_card_id(ev: &web_sys::DragEvent) -> Option<CardId> {
 
 /// The distinct colors and numbers actually present in a hand — the only
 /// clues that wouldn't be rejected by the engine as touching zero cards.
+///
+/// A multicolor card counts as *every* color when receiving a clue (see
+/// `GameState::apply_clue` in game-core), so once a hand holds one, every
+/// base color becomes a legal clue for that hand even if none of its other
+/// cards are actually that color — but multicolor itself can never be the
+/// color named in a clue, so it's never included here.
 fn valid_clues(cards: &[VisibleCard]) -> (Vec<Color>, Vec<u8>) {
-    let mut colors: Vec<Color> = cards.iter().filter_map(|c| c.card.map(|card| card.color)).collect();
+    let has_multicolor = cards
+        .iter()
+        .any(|c| c.card.map(|card| card.color) == Some(Color::Multicolor));
+
+    let mut colors: Vec<Color> = if has_multicolor {
+        Color::ALL.to_vec()
+    } else {
+        cards.iter().filter_map(|c| c.card.map(|card| card.color)).collect()
+    };
     colors.sort();
     colors.dedup();
+
     let mut numbers: Vec<u8> = cards.iter().filter_map(|c| c.card.map(|card| card.number)).collect();
     numbers.sort();
     numbers.dedup();
@@ -163,164 +184,416 @@ fn firework_burst(progress: u8) -> impl IntoView {
     }
 }
 
-#[component]
-pub fn GameBoard() -> impl IntoView {
-    let ctx = use_context::<AppContext>().expect("AppContext should be provided by App");
+/// How long the hand-swap slide takes. Kept in one place since it has to
+/// match between the CSS `transition` we set from Rust and (loosely) how
+/// long it feels right for a handful of DOM nodes gliding past each other.
+const HAND_SLIDE_MS: u32 = 350;
 
-    let (selected_target, set_selected_target) = create_signal(None::<PlayerId>);
-    // Tracks whether a card is currently being dragged, so the play/discard
-    // drop zones can highlight themselves while a drag is in progress.
-    let (is_dragging, set_is_dragging) = create_signal(false);
+/// Builds the whole in-progress board — fireworks, discard pile, drop
+/// zones, and the turn-ordered hand list — once a `PlayerView` exists.
+/// Constructed exactly once per game (see the `<Show>` in `GameBoard`
+/// below), which matters a lot for the hand list: it's rendered through
+/// `<For>` so each player keeps the *same* DOM node turn after turn, which
+/// is what lets the FLIP effect animate a hand sliding to its new spot
+/// instead of the whole list just popping into a new order.
+fn ready_board(
+    ctx: AppContext,
+    selected_target: ReadSignal<Option<PlayerId>>,
+    set_selected_target: WriteSignal<Option<PlayerId>>,
+    is_dragging: ReadSignal<bool>,
+    set_is_dragging: WriteSignal<bool>,
+) -> impl IntoView {
+    let initial = ctx
+        .view
+        .get_untracked()
+        .expect("ready_board is only built once ctx.view is populated");
+    let you = initial.you;
+
+    let mut all_ids: Vec<PlayerId> = initial.hands.keys().copied().collect();
+    all_ids.sort_by_key(|id| id.0);
+
+    let name_of = move |id: PlayerId| -> String {
+        ctx.roster
+            .get_untracked()
+            .iter()
+            .find(|(pid, _)| *pid == id)
+            .map(|(_, n)| n.clone())
+            .unwrap_or_else(|| format!("Player {}", id.0))
+    };
+
+    // A stable node ref per seat, created once — `<For>` re-uses (moves,
+    // never recreates) the underlying `<div class="hand">` for a given key
+    // as the turn order rotates, so these keep pointing at the same real
+    // DOM element for the whole game.
+    let hand_refs: HashMap<PlayerId, NodeRef<Div>> =
+        all_ids.iter().map(|&pid| (pid, create_node_ref::<Div>())).collect();
+
+    // FLIP bookkeeping: the vertical position each hand was measured at the
+    // last time this ran, so the next run can tell how far each one moved.
+    let last_tops: Rc<RefCell<HashMap<PlayerId, f64>>> = Rc::new(RefCell::new(HashMap::new()));
+
+    {
+        let hand_refs = hand_refs.clone();
+        let last_tops = last_tops.clone();
+        create_effect(move |_| {
+            // Re-run this effect exactly when the hand list can have
+            // reordered — i.e. every state update, since every accepted
+            // action advances whose turn it is.
+            let Some(_view) = ctx.view.get() else {
+                return;
+            };
+
+            let mut new_tops = HashMap::with_capacity(hand_refs.len());
+            for (&pid, node_ref) in &hand_refs {
+                let Some(el) = node_ref.get() else { continue };
+                let top = el.get_bounding_client_rect().top();
+                new_tops.insert(pid, top);
+
+                let old_top = last_tops.borrow().get(&pid).copied();
+                if let Some(old_top) = old_top {
+                    let delta = old_top - top;
+                    if delta.abs() > 1.0 {
+                        // `HtmlElement::style` is leptos_dom's own builder
+                        // method (it consumes and returns `Self`), not the
+                        // web-sys `CssStyleDeclaration` getter — so each
+                        // call is chained/reassigned rather than going
+                        // through a separate `.style()` handle.
+                        //
+                        // Jump back to where it visually was, with
+                        // transitions off so this doesn't itself animate...
+                        let el = el
+                            .style("transition", "none")
+                            .style("transform", format!("translateY({delta:.1}px)"));
+                        // ...force the browser to actually commit that
+                        // frame before we change anything else...
+                        let _ = el.get_bounding_client_rect();
+                        // ...then animate back to its real (natural, zero
+                        // offset) position.
+                        let _ = el
+                            .style("transition", format!("transform {HAND_SLIDE_MS}ms ease"))
+                            .style("transform", "translateY(0)");
+                    }
+                }
+            }
+            *last_tops.borrow_mut() = new_tops;
+        });
+    }
+
+    let coarse = move || {
+        let Some(view) = ctx.view.get() else {
+            return Vec::<View>::new().into_view();
+        };
+
+        let is_my_turn = view.current_turn == you;
+        let can_act = is_my_turn && view.status == GameStatus::InProgress;
+        let can_discard = can_act && view.clue_tokens < MAX_CLUE_TOKENS;
+        let active_colors = view.rules.active_colors();
+
+        let status_line = match view.status {
+            GameStatus::InProgress => None,
+            GameStatus::Finished(reason) => {
+                let why = match reason {
+                    EndReason::FusesExhausted => "ran out of fuses",
+                    EndReason::DeckExhausted => "the deck ran out",
+                    EndReason::PerfectScore => "a perfect score",
+                };
+                let max_score = active_colors.len() as u8 * 5;
+                Some(format!(
+                    "Game over — {why}. Final score: {}/{max_score}",
+                    view.score
+                ))
+            }
+        };
+
+        let fireworks_items = active_colors
+            .iter()
+            .map(|&color| {
+                let n = *view.fireworks.get(&color).unwrap_or(&0);
+                let label = if n == 0 { "—".to_string() } else { n.to_string() };
+                view! {
+                    <div class=format!("firework firework-{}", color_class(color))>
+                        <span class="firework-label">{format!("{color:?}")}</span>
+                        {firework_burst(n)}
+                        <span class="firework-value">{label}</span>
+                    </div>
+                }
+            })
+            .collect_view();
+
+        let discard_groups = active_colors
+            .iter()
+            .filter_map(|&color| {
+                let mut numbers: Vec<u8> = view
+                    .discard_pile
+                    .iter()
+                    .filter(|c| c.color == color)
+                    .map(|c| c.number)
+                    .collect();
+                if numbers.is_empty() {
+                    return None;
+                }
+                numbers.sort_unstable();
+                let chips = numbers
+                    .iter()
+                    .map(|n| {
+                        view! {
+                            <span class=format!("chip card-{}", color_class(color))>
+                                {n.to_string()}
+                            </span>
+                        }
+                    })
+                    .collect_view();
+                Some(view! {
+                    <div class="discard-row">
+                        <span class="discard-color-label">{format!("{color:?}")}</span>
+                        <span class="discard-chips">{chips}</span>
+                    </div>
+                })
+            })
+            .collect_view();
+
+        let mut nodes: Vec<View> = Vec::new();
+        if let Some(line) = status_line {
+            nodes.push(view! { <p class="status-line">{line}</p> }.into_view());
+        }
+
+        nodes.push(
+            view! {
+                <div
+                    class=move || {
+                        let mut classes = vec!["panel", "drop-zone"];
+                        if !can_act {
+                            classes.push("disabled");
+                        } else if is_dragging.get() {
+                            classes.push("drag-active");
+                        }
+                        classes.join(" ")
+                    }
+                    on:dragover=move |ev: web_sys::DragEvent| ev.prevent_default()
+                    on:drop=move |ev: web_sys::DragEvent| {
+                        ev.prevent_default();
+                        set_is_dragging.set(false);
+                        if let Some(card_id) = dragged_card_id(&ev) {
+                            ctx.send(ClientMessage::Action(Action::Play { card_id }));
+                        }
+                    }
+                >
+                    <div class="fireworks">{fireworks_items}</div>
+                    <p class="tokens">
+                        "Clues " <span class="pip-row">{pips(view.clue_tokens, MAX_CLUE_TOKENS)}</span>
+                        "   Fuses " <span class="pip-row">{pips(view.fuse_tokens, MAX_FUSE_TOKENS)}</span>
+                        "   Deck: " {view.draw_pile_count}
+                    </p>
+                    <p class="hint">"Drag a card here to play it."</p>
+                </div>
+            }
+            .into_view(),
+        );
+
+        nodes.push(
+            view! {
+                <div
+                    class=move || {
+                        let mut classes = vec!["panel", "drop-zone"];
+                        if !can_discard {
+                            classes.push("disabled");
+                        } else if is_dragging.get() {
+                            classes.push("drag-active");
+                        }
+                        classes.join(" ")
+                    }
+                    on:dragover=move |ev: web_sys::DragEvent| ev.prevent_default()
+                    on:drop=move |ev: web_sys::DragEvent| {
+                        ev.prevent_default();
+                        set_is_dragging.set(false);
+                        if let Some(card_id) = dragged_card_id(&ev) {
+                            ctx.send(ClientMessage::Action(Action::Discard { card_id }));
+                        }
+                    }
+                >
+                    <h3>"Discard pile"</h3>
+                    {if view.discard_pile.is_empty() {
+                        view! { <p class="hint">"Nothing discarded yet."</p> }.into_view()
+                    } else {
+                        view! { <div class="discard-groups">{discard_groups}</div> }.into_view()
+                    }}
+                    <p class="hint">"Drag a card here to discard it."</p>
+                </div>
+            }
+            .into_view(),
+        );
+
+        nodes.into_view()
+    };
+
+    let hand_refs_for_children = hand_refs.clone();
 
     view! {
-        <div class="game-board">
-            {move || {
-                let Some(view) = ctx.view.get() else {
-                    return view! { <p>"Waiting for the game to start…"</p> }.into_view();
-                };
+        <div>
+            {coarse}
 
-                let you = view.you;
-                let is_my_turn = view.current_turn == you;
-                let can_act = is_my_turn && view.status == GameStatus::InProgress;
-                let can_clue = can_act && view.clue_tokens > 0;
-                let can_discard = can_act && view.clue_tokens < MAX_CLUE_TOKENS;
-                let roster = ctx.roster.get_untracked();
-                let name_of = move |id: PlayerId| {
-                    roster
-                        .iter()
-                        .find(|(pid, _)| *pid == id)
-                        .map(|(_, n)| n.clone())
-                        .unwrap_or_else(|| format!("Player {}", id.0))
-                };
-
-                // Only set for the game-over message; while the game is in
-                // progress, whose turn it is is already shown atop the hand
-                // list ("Now playing"), so no separate line is needed here.
-                let status_line: Option<String> = match view.status {
-                    GameStatus::InProgress => None,
-                    GameStatus::Finished(reason) => {
-                        let why = match reason {
-                            EndReason::FusesExhausted => "ran out of fuses",
-                            EndReason::DeckExhausted => "the deck ran out",
-                            EndReason::PerfectScore => "a perfect score",
-                        };
-                        Some(format!("Game over — {why}. Final score: {}/25", view.score))
+            <div class="panel">
+                <p class="hint">"Top of the list plays next. Click another player's name to see clues you can give them."</p>
+                <For
+                    each=move || {
+                        let Some(view) = ctx.view.get() else { return Vec::new() };
+                        let mut ids: Vec<PlayerId> = view.hands.keys().copied().collect();
+                        ids.sort_by_key(|id| id.0);
+                        turn_order(&ids, view.current_turn)
                     }
-                };
-
-                let fireworks_items = Color::ALL
-                    .into_iter()
-                    .map(|color| {
-                        let n = *view.fireworks.get(&color).unwrap_or(&0);
-                        let label = if n == 0 { "—".to_string() } else { n.to_string() };
-                        view! {
-                            <div class=format!("firework firework-{}", color_class(color))>
-                                <span class="firework-label">{format!("{color:?}")}</span>
-                                {firework_burst(n)}
-                                <span class="firework-value">{label}</span>
-                            </div>
-                        }
-                    })
-                    .collect_view();
-
-                let discard_groups = Color::ALL
-                    .into_iter()
-                    .filter_map(|color| {
-                        let mut numbers: Vec<u8> = view
-                            .discard_pile
-                            .iter()
-                            .filter(|c| c.color == color)
-                            .map(|c| c.number)
-                            .collect();
-                        if numbers.is_empty() {
-                            return None;
-                        }
-                        numbers.sort_unstable();
-                        let chips = numbers
-                            .iter()
-                            .map(|n| {
-                                view! {
-                                    <span class=format!("chip card-{}", color_class(color))>
-                                        {n.to_string()}
-                                    </span>
-                                }
-                            })
-                            .collect_view();
-                        Some(view! {
-                            <div class="discard-row">
-                                <span class="discard-color-label">{format!("{color:?}")}</span>
-                                <span class="discard-chips">{chips}</span>
-                            </div>
-                        })
-                    })
-                    .collect_view();
-
-                let mut all_ids: Vec<PlayerId> = view.hands.keys().copied().collect();
-                all_ids.sort_by_key(|id| id.0);
-                let ordered_ids = turn_order(&all_ids, view.current_turn);
-
-                // One combined pass over every seat in turn order — the top
-                // of this list is always whoever plays next, your own hand
-                // included, so "who plays when" reads directly top to bottom
-                // rather than being split across separate "you" / "others"
-                // sections.
-                let hand_blocks = ordered_ids
-                    .iter()
-                    .map(|&pid| {
+                    key=|pid: &PlayerId| *pid
+                    children=move |pid: PlayerId| {
+                        let node_ref = hand_refs_for_children[&pid];
                         let is_you = pid == you;
-                        let is_current = pid == view.current_turn;
-                        let cards = view.hands.get(&pid).cloned().unwrap_or_default();
 
-                        let mut classes = vec!["hand".to_string()];
-                        if is_current {
-                            classes.push("hand-current".to_string());
-                        }
+                        let hand_class = move || {
+                            let is_current = ctx.view.get().map(|v| v.current_turn == pid).unwrap_or(false);
+                            let mut classes = vec!["hand".to_string()];
+                            if is_current {
+                                classes.push("hand-current".to_string());
+                            }
+                            if !is_you && selected_target.get() == Some(pid) {
+                                classes.push("hand-selected".to_string());
+                            }
+                            classes.join(" ")
+                        };
 
-                        let now_playing = is_current.then(|| {
-                            view! { <span class="now-playing">"Now playing"</span> }
-                        });
+                        let now_playing = move || {
+                            let is_current = ctx.view.get().map(|v| v.current_turn == pid).unwrap_or(false);
+                            is_current.then(|| view! { <span class="now-playing">"Now playing"</span> })
+                        };
 
-                        let last_move_line = view.last_moves.get(&pid).map(|mv| {
-                            view! { <span class="last-move">{describe_move(mv, &name_of)}</span> }
-                        });
+                        let last_move_line = move || {
+                            ctx.view.get().and_then(|v| {
+                                v.last_moves.get(&pid).map(|mv| {
+                                    view! { <span class="last-move">{describe_move(mv, &name_of)}</span> }
+                                })
+                            })
+                        };
 
-                        if is_you {
-                            let card_items = cards
-                                .iter()
-                                .map(|c| {
-                                    let mut parts = Vec::new();
-                                    if let Some(color) = c.knowledge.known_color {
-                                        parts.push(format!("{color:?}"));
-                                    }
-                                    if let Some(number) = c.knowledge.known_number {
-                                        parts.push(number.to_string());
-                                    }
-                                    let hint =
-                                        if parts.is_empty() { "?".to_string() } else { parts.join(" ") };
-                                    let card_id = c.id;
-                                    view! {
-                                        <li
-                                            class="card card-unknown"
-                                            draggable=if can_act { "true" } else { "false" }
-                                            on:dragstart=move |ev: web_sys::DragEvent| {
-                                                if let Some(dt) = ev.data_transfer() {
-                                                    let _ = dt.set_data("text/plain", &card_id.0.to_string());
+                        let card_items = move || {
+                            let Some(view) = ctx.view.get() else {
+                                return Vec::<View>::new().into_view();
+                            };
+                            let cards = view.hands.get(&pid).cloned().unwrap_or_default();
+                            let can_act =
+                                view.current_turn == you && view.status == GameStatus::InProgress;
+
+                            if is_you {
+                                cards
+                                    .iter()
+                                    .map(|c| {
+                                        let mut parts = Vec::new();
+                                        if let Some(color) = c.knowledge.known_color {
+                                            parts.push(format!("{color:?}"));
+                                        }
+                                        if let Some(number) = c.knowledge.known_number {
+                                            parts.push(number.to_string());
+                                        }
+                                        let hint = if parts.is_empty() {
+                                            "?".to_string()
+                                        } else {
+                                            parts.join(" ")
+                                        };
+                                        let card_id = c.id;
+                                        view! {
+                                            <li
+                                                class="card card-unknown"
+                                                draggable=if can_act { "true" } else { "false" }
+                                                on:dragstart=move |ev: web_sys::DragEvent| {
+                                                    if let Some(dt) = ev.data_transfer() {
+                                                        let _ = dt.set_data("text/plain", &card_id.0.to_string());
+                                                    }
+                                                    set_is_dragging.set(true);
                                                 }
-                                                set_is_dragging.set(true);
-                                            }
-                                            on:dragend=move |_ev: web_sys::DragEvent| {
-                                                set_is_dragging.set(false);
+                                                on:dragend=move |_ev: web_sys::DragEvent| {
+                                                    set_is_dragging.set(false);
+                                                }
+                                            >
+                                                <span class="card-hint">{hint}</span>
+                                                <span class="card-tag">{format!("#{}", c.id.0)}</span>
+                                            </li>
+                                        }
+                                        .into_view()
+                                    })
+                                    .collect_view()
+                            } else {
+                                cards
+                                    .iter()
+                                    .map(|c| {
+                                        let card = c.card.expect("other players' cards are always visible");
+                                        view! {
+                                            <li class=format!("card card-{}", color_class(card.color))>
+                                                {card.number.to_string()}
+                                            </li>
+                                        }
+                                        .into_view()
+                                    })
+                                    .collect_view()
+                            }
+                        };
+
+                        let clue_section = move || {
+                            if is_you || selected_target.get() != Some(pid) {
+                                return None;
+                            }
+                            let view = ctx.view.get()?;
+                            let cards = view.hands.get(&pid).cloned().unwrap_or_default();
+                            let can_act =
+                                view.current_turn == you && view.status == GameStatus::InProgress;
+                            let can_clue = can_act && view.clue_tokens > 0;
+
+                            let (valid_colors, valid_numbers) = valid_clues(&cards);
+                            let color_buttons = valid_colors
+                                .iter()
+                                .map(|&color| {
+                                    view! {
+                                        <button
+                                            class=format!("clue-btn card-{}", color_class(color))
+                                            disabled=!can_clue
+                                            on:click=move |_| {
+                                                ctx.send(ClientMessage::Action(Action::Clue {
+                                                    target: pid,
+                                                    clue: Clue::Color(color),
+                                                }));
                                             }
                                         >
-                                            <span class="card-hint">{hint}</span>
-                                            <span class="card-tag">{format!("#{}", c.id.0)}</span>
-                                        </li>
+                                            {format!("{color:?}")}
+                                        </button>
+                                    }
+                                })
+                                .collect_view();
+                            let number_buttons = valid_numbers
+                                .iter()
+                                .map(|&number| {
+                                    view! {
+                                        <button
+                                            class="clue-btn"
+                                            disabled=!can_clue
+                                            on:click=move |_| {
+                                                ctx.send(ClientMessage::Action(Action::Clue {
+                                                    target: pid,
+                                                    clue: Clue::Number(number),
+                                                }));
+                                            }
+                                        >
+                                            {number.to_string()}
+                                        </button>
                                     }
                                 })
                                 .collect_view();
 
+                            Some(view! {
+                                <div class="clue-options">
+                                    <p class="hint">"Give a clue:"</p>
+                                    <div class="clue-buttons">{color_buttons}{number_buttons}</div>
+                                </div>
+                            })
+                        };
+
+                        if is_you {
                             view! {
-                                <div class=classes.join(" ")>
+                                <div class=hand_class _ref=node_ref>
                                     <div class="hand-header">
                                         <h3>"Your hand"</h3>
                                         {now_playing}
@@ -331,73 +604,8 @@ pub fn GameBoard() -> impl IntoView {
                             }
                             .into_view()
                         } else {
-                            let is_selected = selected_target.get() == Some(pid);
-                            if is_selected {
-                                classes.push("hand-selected".to_string());
-                            }
-
-                            let card_items = cards
-                                .iter()
-                                .map(|c| {
-                                    let card = c.card.expect("other players' cards are always visible");
-                                    view! {
-                                        <li class=format!("card card-{}", color_class(card.color))>
-                                            {card.number.to_string()}
-                                        </li>
-                                    }
-                                })
-                                .collect_view();
-
-                            let (valid_colors, valid_numbers) = valid_clues(&cards);
-                            let clue_section = is_selected.then(|| {
-                                let color_buttons = valid_colors
-                                    .iter()
-                                    .map(|&color| {
-                                        view! {
-                                            <button
-                                                class=format!("clue-btn card-{}", color_class(color))
-                                                disabled=!can_clue
-                                                on:click=move |_| {
-                                                    ctx.send(ClientMessage::Action(Action::Clue {
-                                                        target: pid,
-                                                        clue: Clue::Color(color),
-                                                    }))
-                                                }
-                                            >
-                                                {format!("{color:?}")}
-                                            </button>
-                                        }
-                                    })
-                                    .collect_view();
-                                let number_buttons = valid_numbers
-                                    .iter()
-                                    .map(|&number| {
-                                        view! {
-                                            <button
-                                                class="clue-btn"
-                                                disabled=!can_clue
-                                                on:click=move |_| {
-                                                    ctx.send(ClientMessage::Action(Action::Clue {
-                                                        target: pid,
-                                                        clue: Clue::Number(number),
-                                                    }))
-                                                }
-                                            >
-                                                {number.to_string()}
-                                            </button>
-                                        }
-                                    })
-                                    .collect_view();
-                                view! {
-                                    <div class="clue-options">
-                                        <p class="hint">"Give a clue:"</p>
-                                        <div class="clue-buttons">{color_buttons}{number_buttons}</div>
-                                    </div>
-                                }
-                            });
-
                             view! {
-                                <div class=classes.join(" ")>
+                                <div class=hand_class _ref=node_ref>
                                     <div class="hand-header">
                                         <h3
                                             class="player-name"
@@ -418,77 +626,30 @@ pub fn GameBoard() -> impl IntoView {
                             }
                             .into_view()
                         }
-                    })
-                    .collect_view();
+                    }
+                />
+            </div>
+        </div>
+    }
+}
 
-                view! {
-                    <div>
-                        {status_line.map(|line| view! { <p class="status-line">{line}</p> })}
+#[component]
+pub fn GameBoard() -> impl IntoView {
+    let ctx = use_context::<AppContext>().expect("AppContext should be provided by App");
 
-                        <div
-                            class=move || {
-                                let mut classes = vec!["panel", "drop-zone"];
-                                if !can_act {
-                                    classes.push("disabled");
-                                } else if is_dragging.get() {
-                                    classes.push("drag-active");
-                                }
-                                classes.join(" ")
-                            }
-                            on:dragover=move |ev: web_sys::DragEvent| ev.prevent_default()
-                            on:drop=move |ev: web_sys::DragEvent| {
-                                ev.prevent_default();
-                                set_is_dragging.set(false);
-                                if let Some(card_id) = dragged_card_id(&ev) {
-                                    ctx.send(ClientMessage::Action(Action::Play { card_id }));
-                                }
-                            }
-                        >
-                            <div class="fireworks">{fireworks_items}</div>
-                            <p class="tokens">
-                                "Clues " <span class="pip-row">{pips(view.clue_tokens, MAX_CLUE_TOKENS)}</span>
-                                "   Fuses " <span class="pip-row">{pips(view.fuse_tokens, MAX_FUSE_TOKENS)}</span>
-                                "   Deck: " {view.draw_pile_count}
-                            </p>
-                            <p class="hint">"Drag a card here to play it."</p>
-                        </div>
+    let (selected_target, set_selected_target) = create_signal(None::<PlayerId>);
+    // Tracks whether a card is currently being dragged, so the play/discard
+    // drop zones can highlight themselves while a drag is in progress.
+    let (is_dragging, set_is_dragging) = create_signal(false);
 
-                        <div
-                            class=move || {
-                                let mut classes = vec!["panel", "drop-zone"];
-                                if !can_discard {
-                                    classes.push("disabled");
-                                } else if is_dragging.get() {
-                                    classes.push("drag-active");
-                                }
-                                classes.join(" ")
-                            }
-                            on:dragover=move |ev: web_sys::DragEvent| ev.prevent_default()
-                            on:drop=move |ev: web_sys::DragEvent| {
-                                ev.prevent_default();
-                                set_is_dragging.set(false);
-                                if let Some(card_id) = dragged_card_id(&ev) {
-                                    ctx.send(ClientMessage::Action(Action::Discard { card_id }));
-                                }
-                            }
-                        >
-                            <h3>"Discard pile"</h3>
-                            {if view.discard_pile.is_empty() {
-                                view! { <p class="hint">"Nothing discarded yet."</p> }.into_view()
-                            } else {
-                                view! { <div class="discard-groups">{discard_groups}</div> }.into_view()
-                            }}
-                            <p class="hint">"Drag a card here to discard it."</p>
-                        </div>
-
-                        <div class="panel">
-                            <p class="hint">"Top of the list plays next. Click another player's name to see clues you can give them."</p>
-                            {hand_blocks}
-                        </div>
-                    </div>
-                }
-                    .into_view()
-            }}
+    view! {
+        <div class="game-board">
+            <Show
+                when=move || ctx.view.with(Option::is_some)
+                fallback=|| view! { <p>"Waiting for the game to start…"</p> }
+            >
+                {move || ready_board(ctx, selected_target, set_selected_target, is_dragging, set_is_dragging)}
+            </Show>
         </div>
     }
 }

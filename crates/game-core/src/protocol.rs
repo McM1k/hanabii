@@ -5,6 +5,7 @@ use serde::{Deserialize, Serialize};
 use crate::card::{Card, CardId, Color, Number};
 use crate::knowledge::CardKnowledge;
 use crate::player::PlayerId;
+use crate::rules::GameRules;
 use crate::state::{GameState, GameStatus, LastMove};
 
 /// A card as seen by one particular viewer: the face is hidden for a
@@ -33,6 +34,10 @@ pub struct PlayerView {
     pub status: GameStatus,
     pub score: u8,
     pub last_moves: HashMap<PlayerId, LastMove>,
+    /// The variant rules this game was started with — lets the client know,
+    /// for instance, which colors are actually in play, without having to
+    /// infer it from `fireworks`' (arbitrarily-ordered) keys.
+    pub rules: GameRules,
 }
 
 impl GameState {
@@ -65,6 +70,7 @@ impl GameState {
             status: self.status,
             score: self.score(),
             last_moves: self.last_moves.clone(),
+            rules: self.rules,
         }
     }
 }
@@ -75,7 +81,7 @@ mod tests {
 
     #[test]
     fn own_hand_is_redacted_others_are_not() {
-        let g = GameState::new(2, 5);
+        let g = GameState::new(2, 5, GameRules::default());
         let view = g.view_for(PlayerId(0));
 
         assert!(view.hands[&PlayerId(0)].iter().all(|c| c.card.is_none()));
@@ -84,7 +90,7 @@ mod tests {
 
     #[test]
     fn clued_information_is_still_visible_without_the_card_itself() {
-        let mut g = GameState::new(2, 5);
+        let mut g = GameState::new(2, 5, GameRules::default());
 
         // Player 0 always acts first (current_turn starts at 0). Give a
         // throwaway clue to pass the turn to player 1 before testing the
@@ -112,5 +118,13 @@ mod tests {
         let view = g.view_for(PlayerId(0));
         assert_eq!(view.hands[&PlayerId(0)][0].card, None);
         assert_eq!(view.hands[&PlayerId(0)][0].knowledge.known_color, Some(color));
+    }
+
+    #[test]
+    fn view_carries_the_game_rules() {
+        let g = GameState::new(2, 5, GameRules { multicolor: true });
+        let view = g.view_for(PlayerId(0));
+        assert_eq!(view.rules, GameRules { multicolor: true });
+        assert_eq!(view.fireworks.len(), 6);
     }
 }

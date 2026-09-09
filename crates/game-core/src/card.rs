@@ -7,9 +7,16 @@ pub enum Color {
     Yellow,
     Green,
     Blue,
+    /// The optional 6th suit (see [`crate::rules::GameRules`]). Only ever
+    /// appears in a deck, a hand, the discard pile, etc. when the multicolor
+    /// rule is enabled for that game.
+    Multicolor,
 }
 
 impl Color {
+    /// The five standard suits, always in play. Does not include
+    /// [`Color::Multicolor`] — see [`crate::rules::GameRules::active_colors`]
+    /// for the full set of colors in play for a given game.
     pub const ALL: [Color; 5] = [
         Color::White,
         Color::Red,
