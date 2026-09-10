@@ -11,6 +11,41 @@ use crate::rules::GameRules;
 pub const MAX_CLUE_TOKENS: u8 = 8;
 pub const MAX_FUSE_TOKENS: u8 = 3;
 
+/// True for suits that build their firework in descending order (5 down to
+/// 1) instead of the usual ascending 1-to-5 — currently just Black.
+fn is_reverse_suit(color: Color) -> bool {
+    color == Color::Black
+}
+
+/// The rank that would need to be played next to keep building this suit's
+/// firework, given the rank of whatever's currently on top (0 if nothing's
+/// been played yet). `None` once the suit is complete.
+fn next_expected_rank(color: Color, top: Number) -> Option<Number> {
+    if is_reverse_suit(color) {
+        match top {
+            0 => Some(5),
+            1 => None,
+            n => Some(n - 1),
+        }
+    } else if top < 5 {
+        Some(top + 1)
+    } else {
+        None
+    }
+}
+
+/// How many points a suit's firework is currently worth, given the rank of
+/// whatever's on top (0 if nothing's been played). For a normal suit this
+/// is just the top rank; for a reverse suit it's inverted, since a *lower*
+/// top rank means *more* cards have been played.
+fn points_for(color: Color, top: Number) -> u8 {
+    if is_reverse_suit(color) && top != 0 {
+        6 - top
+    } else {
+        top
+    }
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct HandCard {
     pub id: CardId,
@@ -68,6 +103,9 @@ pub enum ActionError {
     /// The multicolor suit can never be clued directly, even when the
     /// multicolor rule is on — only the five base colors can.
     CannotClueMulticolor,
+    /// The black suit has no color at all for clue purposes — it can't be
+    /// named in a clue any more than it can be touched by one.
+    CannotClueBlack,
     ClueMatchesNothing,
     CardNotInHand,
     CannotDiscardAtMaxClues,
@@ -221,6 +259,11 @@ impl GameState {
             // named in a clue.
             return Err(ActionError::CannotClueMulticolor);
         }
+        if matches!(clue, Clue::Color(Color::Black)) {
+            // Black has no color at all — nothing to name it with, and (see
+            // the is_match arm below) no color clue would touch it anyway.
+            return Err(ActionError::CannotClueBlack);
+        }
         if self.clue_tokens == 0 {
             return Err(ActionError::NoClueTokens);
         }
@@ -237,7 +280,10 @@ impl GameState {
             let is_match = match clue {
                 // A multicolor card counts as every color for clue-matching
                 // purposes, so a "Red" clue touches actual red cards *and*
-                // any multicolor cards in the hand.
+                // any multicolor cards in the hand. Black cards never match
+                // a color clue at all — that falls out of this check for
+                // free, since Black can only ever equal itself, and `c` is
+                // never Black or Multicolor (both rejected above).
                 Clue::Color(c) => hc.card.color == c || hc.card.color == Color::Multicolor,
                 Clue::Number(n) => hc.card.number == n,
             };
@@ -278,11 +324,14 @@ impl GameState {
         self.hands.get_mut(&player).unwrap().remove(idx);
 
         let top = *self.fireworks.get(&played.card.color).unwrap();
-        let success = played.card.number == top + 1;
+        let success = next_expected_rank(played.card.color, top) == Some(played.card.number);
 
         if success {
             self.fireworks.insert(played.card.color, played.card.number);
-            if played.card.number == 5 && self.clue_tokens < MAX_CLUE_TOKENS {
+            // Completing a firework refunds a clue token — for a reverse
+            // suit that means finishing on a 1, not a 5.
+            let completed = next_expected_rank(played.card.color, played.card.number).is_none();
+            if completed && self.clue_tokens < MAX_CLUE_TOKENS {
                 self.clue_tokens += 1;
             }
         } else {
@@ -389,9 +438,10 @@ impl GameState {
             return None;
         }
 
+        let max_score = self.rules.active_colors().len() as u8 * 5;
         if self.fuse_tokens == 0 {
             self.status = GameStatus::Finished(EndReason::FusesExhausted);
-        } else if self.fireworks.values().all(|&n| n == 5) {
+        } else if self.score() == max_score {
             self.status = GameStatus::Finished(EndReason::PerfectScore);
         } else if self.final_round_starting_player == Some(self.current_turn) {
             self.status = GameStatus::Finished(EndReason::DeckExhausted);
@@ -406,8 +456,14 @@ impl GameState {
         }
     }
 
+    /// Total points across every firework. For a normal suit the top rank
+    /// *is* the point count; a reverse suit (Black) is inverted, since it
+    /// counts down rather than up — see `points_for`.
     pub fn score(&self) -> u8 {
-        self.fireworks.values().sum()
+        self.fireworks
+            .iter()
+            .map(|(&color, &top)| points_for(color, top))
+            .sum()
     }
 }
 
@@ -440,7 +496,7 @@ mod tests {
 
     #[test]
     fn multicolor_rule_deals_from_a_sixty_card_deck() {
-        let g = GameState::new(3, 7, GameRules { multicolor: true });
+        let g = GameState::new(3, 7, GameRules { multicolor: true, black: false });
         let dealt: usize = g.hands.values().map(|h| h.len()).sum();
         assert_eq!(dealt + g.draw_pile.len(), 60);
         assert_eq!(g.fireworks.len(), 6);
@@ -489,7 +545,7 @@ mod tests {
 
     #[test]
     fn multicolor_card_is_touched_by_any_color_clue() {
-        let mut g = GameState::new(2, 42, GameRules { multicolor: true });
+        let mut g = GameState::new(2, 42, GameRules { multicolor: true, black: false });
         g.hands.get_mut(&PlayerId(1)).unwrap()[0].card = Card {
             color: Color::Multicolor,
             number: 2,
@@ -522,7 +578,7 @@ mod tests {
 
     #[test]
     fn cannot_clue_multicolor_directly() {
-        let mut g = GameState::new(2, 42, GameRules { multicolor: true });
+        let mut g = GameState::new(2, 42, GameRules { multicolor: true, black: false });
         let result = g.apply_action(
             PlayerId(0),
             Action::Clue {
@@ -535,7 +591,7 @@ mod tests {
 
     #[test]
     fn two_different_color_clues_on_the_same_card_reveal_it_as_multicolor() {
-        let mut g = GameState::new(2, 42, GameRules { multicolor: true });
+        let mut g = GameState::new(2, 42, GameRules { multicolor: true, black: false });
         g.hands.get_mut(&PlayerId(1)).unwrap()[0].card = Card {
             color: Color::Multicolor,
             number: 3,
@@ -593,6 +649,136 @@ mod tests {
         assert!(knowledge.inferred_multicolor());
         // The most-recently-clued color is still tracked too.
         assert_eq!(knowledge.known_color, Some(Color::White));
+    }
+
+    #[test]
+    fn cannot_clue_black_directly() {
+        let mut g = GameState::new(2, 42, GameRules { multicolor: false, black: true });
+        let result = g.apply_action(
+            PlayerId(0),
+            Action::Clue {
+                target: PlayerId(1),
+                clue: Clue::Color(Color::Black),
+            },
+        );
+        assert_eq!(result.unwrap_err(), ActionError::CannotClueBlack);
+    }
+
+    #[test]
+    fn color_clues_never_touch_black_cards() {
+        let mut g = GameState::new(2, 42, GameRules { multicolor: false, black: true });
+        g.hands.get_mut(&PlayerId(1)).unwrap()[0].card = Card {
+            color: Color::Black,
+            number: 3,
+        };
+        // A real red card too, so the clue below actually touches
+        // *something* and isn't rejected as ClueMatchesNothing.
+        g.hands.get_mut(&PlayerId(1)).unwrap()[1].card = Card {
+            color: Color::Red,
+            number: 2,
+        };
+        let black_id = g.hands[&PlayerId(1)][0].id;
+
+        let events = g
+            .apply_action(
+                PlayerId(0),
+                Action::Clue {
+                    target: PlayerId(1),
+                    clue: Clue::Color(Color::Red),
+                },
+            )
+            .unwrap();
+        match &events[0] {
+            Event::ClueGiven { touched, .. } => assert!(!touched.contains(&black_id)),
+            other => panic!("expected a ClueGiven event, got {other:?}"),
+        }
+        let knowledge = &g.hands[&PlayerId(1)]
+            .iter()
+            .find(|hc| hc.id == black_id)
+            .unwrap()
+            .knowledge;
+        // Not being touched teaches the same negative info as any other
+        // non-matching card.
+        assert!(knowledge.not_colors.contains(&Color::Red));
+    }
+
+    #[test]
+    fn black_suit_must_be_played_in_descending_order() {
+        let mut g = GameState::new(2, 42, GameRules { multicolor: false, black: true });
+        g.hands.get_mut(&PlayerId(0)).unwrap()[0].card = Card {
+            color: Color::Black,
+            number: 1,
+        };
+        let black_one_id = g.hands[&PlayerId(0)][0].id;
+
+        // Playing the 1 first should fail — Black starts at 5, not 1.
+        g.apply_action(PlayerId(0), Action::Play { card_id: black_one_id })
+            .unwrap();
+        assert_eq!(g.fuse_tokens, MAX_FUSE_TOKENS - 1);
+        assert_eq!(*g.fireworks.get(&Color::Black).unwrap(), 0);
+
+        // A black 5, played next, should succeed.
+        g.hands.get_mut(&PlayerId(1)).unwrap()[0].card = Card {
+            color: Color::Black,
+            number: 5,
+        };
+        let black_five_id = g.hands[&PlayerId(1)][0].id;
+        g.apply_action(PlayerId(1), Action::Play { card_id: black_five_id })
+            .unwrap();
+        assert_eq!(*g.fireworks.get(&Color::Black).unwrap(), 5);
+        assert_eq!(g.fuse_tokens, MAX_FUSE_TOKENS - 1); // unchanged: this one succeeded
+    }
+
+    #[test]
+    fn completing_black_suit_refunds_a_clue_token() {
+        let mut g = GameState::new(2, 42, GameRules { multicolor: false, black: true });
+        // Fast-forward to 5,4,3,2 already played, with a token spent so a
+        // refund is actually observable.
+        g.fireworks.insert(Color::Black, 2);
+        g.clue_tokens = MAX_CLUE_TOKENS - 1;
+
+        g.hands.get_mut(&PlayerId(0)).unwrap()[0].card = Card {
+            color: Color::Black,
+            number: 1,
+        };
+        let black_one_id = g.hands[&PlayerId(0)][0].id;
+
+        g.apply_action(PlayerId(0), Action::Play { card_id: black_one_id })
+            .unwrap();
+
+        assert_eq!(*g.fireworks.get(&Color::Black).unwrap(), 1);
+        assert_eq!(g.clue_tokens, MAX_CLUE_TOKENS);
+    }
+
+    #[test]
+    fn score_counts_black_progress_correctly_despite_descending_ranks() {
+        let mut g = GameState::new(2, 42, GameRules { multicolor: false, black: true });
+        // Two black cards played (5 then 4) is 2 points, even though the
+        // rank sitting on top of the pile (4) is *lower* than the count
+        // would suggest for a normal ascending suit.
+        g.fireworks.insert(Color::Black, 4);
+        assert_eq!(g.score(), 2);
+    }
+
+    #[test]
+    fn perfect_score_with_black_uses_the_right_max() {
+        let mut g = GameState::new(2, 42, GameRules { multicolor: false, black: true });
+        for color in Color::ALL {
+            g.fireworks.insert(color, 5);
+        }
+        g.fireworks.insert(Color::Black, 2); // one black play short of complete
+
+        g.hands.get_mut(&PlayerId(0)).unwrap()[0].card = Card {
+            color: Color::Black,
+            number: 1,
+        };
+        let black_one_id = g.hands[&PlayerId(0)][0].id;
+
+        g.apply_action(PlayerId(0), Action::Play { card_id: black_one_id })
+            .unwrap();
+
+        assert_eq!(g.score(), 30); // 5 base suits at 5 each, plus black's 5
+        assert_eq!(g.status, GameStatus::Finished(EndReason::PerfectScore));
     }
 
     #[test]

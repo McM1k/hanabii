@@ -12,6 +12,10 @@
   --yellow-fw: #e8b647;
   --green-fw: #4c9a6a;
   --blue-fw: #3e7cb1;
+  /* Deliberately not pure black — the page background is already a dark
+     navy, so this needs its own visible edge (see the border overrides
+     below) to avoid disappearing into it. */
+  --black-fw: #2a2a2a;
 }
 
 * {
@@ -234,6 +238,12 @@ button:disabled {
      arbitrary solid accent. */
   background: linear-gradient(135deg, var(--red-fw), var(--yellow-fw), var(--green-fw), var(--blue-fw));
 }
+.firework-black {
+  /* Same border concern as .card-black — needs a visible edge against the
+     page background instead of the transparent one the others get. */
+  background: var(--black-fw);
+  border-color: var(--paper-dim);
+}
 
 .firework-white .firework-label,
 .firework-white .firework-value,
@@ -254,6 +264,13 @@ button:disabled {
 .firework-multicolor .firework-value,
 .firework-multicolor .firework-burst {
   color: var(--night);
+}
+/* Black's swatch is dark, so — unlike every other suit above — it needs
+   light text rather than dark. */
+.firework-black .firework-label,
+.firework-black .firework-value,
+.firework-black .firework-burst {
+  color: var(--paper);
 }
 
 .tokens {
@@ -429,6 +446,13 @@ button:disabled {
      reads visually as "every color at once". */
   background: linear-gradient(135deg, var(--red-fw), var(--yellow-fw), var(--green-fw), var(--blue-fw));
   color: var(--night);
+}
+.card-black {
+  background: var(--black-fw);
+  color: var(--paper);
+  /* The other suits' default border (a faint dark line) would be
+     invisible against this background, so it needs a lighter one. */
+  border-color: var(--paper-dim);
 }
 
 .card-unknown {

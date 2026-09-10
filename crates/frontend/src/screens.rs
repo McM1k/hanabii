@@ -63,6 +63,11 @@ pub fn Lobby() -> impl IntoView {
         rules.multicolor = !rules.multicolor;
         ctx.send(ClientMessage::SetRules { rules });
     };
+    let on_toggle_black = move |_| {
+        let mut rules = ctx.rules.get_untracked();
+        rules.black = !rules.black;
+        ctx.send(ClientMessage::SetRules { rules });
+    };
 
     view! {
         <div class="panel">
@@ -92,6 +97,15 @@ pub fn Lobby() -> impl IntoView {
                     <span>"Multicolor suit"</span>
                 </label>
                 <p class="hint">"Adds a 6th suit that's wild for color clues but can't be clued directly. Max score becomes 30."</p>
+                <label class="rule-toggle">
+                    <input
+                        type="checkbox"
+                        prop:checked=move || ctx.rules.get().black
+                        on:change=on_toggle_black
+                    />
+                    <span>"Black powder suit"</span>
+                </label>
+                <p class="hint">"Adds a suit with no color at all — color clues never touch it — played 5 down to 1 instead of 1 up to 5. Adds another 5 to the max score."</p>
             </div>
 
             <button on:click=on_start disabled=move || ctx.roster.get().len() < 2>

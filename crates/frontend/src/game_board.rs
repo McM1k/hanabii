@@ -20,6 +20,7 @@ fn color_class(c: Color) -> &'static str {
         Color::Green => "green",
         Color::Blue => "blue",
         Color::Multicolor => "multicolor",
+        Color::Black => "black",
     }
 }
 
@@ -44,7 +45,9 @@ fn dragged_card_id(ev: &web_sys::DragEvent) -> Option<CardId> {
 /// `GameState::apply_clue` in game-core), so once a hand holds one, every
 /// base color becomes a legal clue for that hand even if none of its other
 /// cards are actually that color — but multicolor itself can never be the
-/// color named in a clue, so it's never included here.
+/// color named in a clue, so it's never included here. Black is the
+/// opposite case: it has no color at all, so it's excluded outright rather
+/// than ever making a color clue valid.
 fn valid_clues(cards: &[VisibleCard]) -> (Vec<Color>, Vec<u8>) {
     let has_multicolor = cards
         .iter()
@@ -53,7 +56,11 @@ fn valid_clues(cards: &[VisibleCard]) -> (Vec<Color>, Vec<u8>) {
     let mut colors: Vec<Color> = if has_multicolor {
         Color::ALL.to_vec()
     } else {
-        cards.iter().filter_map(|c| c.card.map(|card| card.color)).collect()
+        cards
+            .iter()
+            .filter_map(|c| c.card.map(|card| card.color))
+            .filter(|&color| color != Color::Black)
+            .collect()
     };
     colors.sort();
     colors.dedup();
@@ -324,12 +331,27 @@ fn ready_board(
         let fireworks_items = active_colors
             .iter()
             .map(|&color| {
-                let n = *view.fireworks.get(&color).unwrap_or(&0);
-                let label = if n == 0 { "—".to_string() } else { n.to_string() };
+                let top = *view.fireworks.get(&color).unwrap_or(&0);
+                let label = if top == 0 { "—".to_string() } else { top.to_string() };
+                // The burst illustration fills in based on how many cards
+                // of this suit have actually been played. For a normal
+                // suit that's just the top rank, but Black counts down (5
+                // first, 1 last), so the raw top rank has to be converted
+                // the other way around to get an actual progress count.
+                let progress = if color == Color::Black && top != 0 {
+                    6 - top
+                } else {
+                    top
+                };
+                let suit_label = if color == Color::Black {
+                    format!("{color:?} \u{2193}")
+                } else {
+                    format!("{color:?}")
+                };
                 view! {
                     <div class=format!("firework firework-{}", color_class(color))>
-                        <span class="firework-label">{format!("{color:?}")}</span>
-                        {firework_burst(n)}
+                        <span class="firework-label">{suit_label}</span>
+                        {firework_burst(progress)}
                         <span class="firework-value">{label}</span>
                     </div>
                 }

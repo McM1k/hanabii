@@ -1,17 +1,27 @@
-use crate::card::Card;
+use crate::card::{Card, Color};
 use crate::rules::GameRules;
 
 /// Standard Hanabi distribution per color: three 1s, two each of 2/3/4, one 5.
 const NUMBER_COUNTS: [(u8, u8); 5] = [(1, 3), (2, 2), (3, 2), (4, 2), (5, 1)];
 
-/// Builds a deck for the given rules — 50 cards normally, or 60 with the
-/// multicolor suit added in (every suit, including multicolor, uses the same
-/// 10-card distribution).
+/// Same total (10 cards) and shape as the standard distribution, but
+/// mirrored onto the ranks: three 5s down to one 1. Used for suits that
+/// build their firework in descending order (currently just Black), where
+/// 5 is the "starting" rank and should be as common as 1 normally is.
+const REVERSE_NUMBER_COUNTS: [(u8, u8); 5] = [(1, 1), (2, 2), (3, 2), (4, 2), (5, 3)];
+
+/// Builds a deck for the given rules — 50 cards normally, plus 10 more for
+/// each optional suit that's turned on (multicolor, black).
 pub fn standard_deck(rules: &GameRules) -> Vec<Card> {
     let colors = rules.active_colors();
     let mut deck = Vec::with_capacity(colors.len() * 10);
     for color in colors {
-        for (number, count) in NUMBER_COUNTS {
+        let counts = if color == Color::Black {
+            REVERSE_NUMBER_COUNTS
+        } else {
+            NUMBER_COUNTS
+        };
+        for (number, count) in counts {
             for _ in 0..count {
                 deck.push(Card { color, number });
             }
@@ -69,12 +79,33 @@ mod tests {
 
     #[test]
     fn multicolor_rule_adds_a_sixth_ten_card_suit() {
-        let rules = GameRules { multicolor: true };
+        let rules = GameRules { multicolor: true, black: false };
         let deck = standard_deck(&rules);
         assert_eq!(deck.len(), 60);
         let multi: Vec<_> = deck.iter().filter(|c| c.color == Color::Multicolor).collect();
         assert_eq!(multi.len(), 10);
         assert_eq!(multi.iter().filter(|c| c.number == 5).count(), 1);
+    }
+
+    #[test]
+    fn black_rule_adds_a_mirrored_ten_card_suit() {
+        let rules = GameRules { multicolor: false, black: true };
+        let deck = standard_deck(&rules);
+        assert_eq!(deck.len(), 60);
+        let black: Vec<_> = deck.iter().filter(|c| c.color == Color::Black).collect();
+        assert_eq!(black.len(), 10);
+        // Mirrored: three 5s (the "starting" rank), one 1 (the "finishing" rank).
+        assert_eq!(black.iter().filter(|c| c.number == 5).count(), 3);
+        assert_eq!(black.iter().filter(|c| c.number == 1).count(), 1);
+        assert_eq!(black.iter().filter(|c| c.number == 2).count(), 2);
+        assert_eq!(black.iter().filter(|c| c.number == 3).count(), 2);
+        assert_eq!(black.iter().filter(|c| c.number == 4).count(), 2);
+    }
+
+    #[test]
+    fn both_optional_suits_stack_to_seventy_cards() {
+        let rules = GameRules { multicolor: true, black: true };
+        assert_eq!(standard_deck(&rules).len(), 70);
     }
 
     #[test]

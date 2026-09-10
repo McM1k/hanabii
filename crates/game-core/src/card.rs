@@ -7,10 +7,17 @@ pub enum Color {
     Yellow,
     Green,
     Blue,
-    /// The optional 6th suit (see [`crate::rules::GameRules`]). Only ever
-    /// appears in a deck, a hand, the discard pile, etc. when the multicolor
-    /// rule is enabled for that game.
+    /// The optional 6th suit (see [`crate::rules::GameRules::multicolor`]).
+    /// Only ever appears in a deck, a hand, the discard pile, etc. when the
+    /// multicolor rule is enabled for that game.
     Multicolor,
+    /// The optional "black powder" suit (see
+    /// [`crate::rules::GameRules::black`]). Has no color at all for clue
+    /// purposes — no color clue, including naming it directly, ever
+    /// touches it, the polar opposite of [`Color::Multicolor`] — and its
+    /// firework is built in *descending* order, 5 down to 1, so its card
+    /// distribution is mirrored too (three 5s, ..., one 1).
+    Black,
 }
 
 impl Color {

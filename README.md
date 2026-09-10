@@ -5,7 +5,7 @@ Axum for the server, Leptos (WASM) for the frontend, WebSockets tying them toget
 
 ## Status
 
-- [x] `game-core` — the rules engine. Compiler-verified, 29/29 tests passing.
+- [x] `game-core` — the rules engine. Compiler-verified, 42/42 tests passing.
 - [x] `server` — Axum + WebSockets, room management. Compiler-verified, 6/6 tests
       passing, join flow tested manually.
 - [x] `frontend` — Leptos UI. Written, **not yet compiler-verified**. This is the
@@ -167,6 +167,13 @@ hanabi/
   but the multicolor suit itself can never be the color named in a clue — same
   as the standard tabletop variant. Builds its own separate firework, so max
   score becomes 30 instead of 25.
+- **Black powder suit** (`GameRules { black: true }`, toggled independently of
+  multicolor): adds another 10-card suit with a mirrored 1/2/2/2/3 distribution
+  (three 5s down to one 1). Black has no color at all — no color clue, including
+  naming it directly, ever touches it, the opposite of multicolor's "wild for
+  every clue" — and its firework is built in *descending* order, 5 down to 1,
+  instead of the usual 1 up to 5. Also adds 5 to the max score. Both suits can
+  be on at once (max score 35).
 
 ## Server protocol (v1)
 
