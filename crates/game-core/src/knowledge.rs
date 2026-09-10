@@ -51,6 +51,17 @@ impl CardKnowledge {
     pub fn inferred_multicolor(&self) -> bool {
         self.clued_colors.len() > 1
     }
+
+    /// True once every base color has been ruled out by a negative color
+    /// clue (given to the rest of the hand, never touching this card).
+    /// This also rules out multicolor along the way for free: a multicolor
+    /// card is touched by *every* color clue, so it can never accumulate
+    /// even one negative color result, let alone all five — meaning the
+    /// only suit left once all five are ruled out is black. Like
+    /// `inferred_multicolor`, this is a hard deduction, not a guess.
+    pub fn inferred_black(&self) -> bool {
+        Color::ALL.iter().all(|c| self.not_colors.contains(c))
+    }
 }
 
 #[cfg(test)]
@@ -92,5 +103,27 @@ mod tests {
         k.apply_positive(Clue::Color(Color::Red));
         k.apply_positive(Clue::Color(Color::Red));
         assert!(!k.inferred_multicolor());
+    }
+
+    #[test]
+    fn ruling_out_every_base_color_implies_black() {
+        let mut k = CardKnowledge::default();
+        for color in [Color::White, Color::Red, Color::Yellow, Color::Green] {
+            k.apply_negative(Clue::Color(color));
+            assert!(!k.inferred_black(), "shouldn't be certain before all five are ruled out");
+        }
+        k.apply_negative(Clue::Color(Color::Blue));
+        assert!(k.inferred_black());
+    }
+
+    #[test]
+    fn a_single_positive_color_clue_rules_out_black_forever() {
+        let mut k = CardKnowledge::default();
+        for color in [Color::White, Color::Red, Color::Yellow, Color::Green] {
+            k.apply_negative(Clue::Color(color));
+        }
+        // Matched Blue instead of missing it — can't be black after all.
+        k.apply_positive(Clue::Color(Color::Blue));
+        assert!(!k.inferred_black());
     }
 }

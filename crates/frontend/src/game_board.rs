@@ -530,6 +530,13 @@ fn ready_board(
                                             // Abbreviated: the card is too
                                             // narrow to fit "Multicolor".
                                             parts.push("Multi".to_string());
+                                        } else if c.knowledge.inferred_black() {
+                                            // Every base color ruled out by
+                                            // a negative clue — the only
+                                            // suit left is black, another
+                                            // hard deduction rather than a
+                                            // guess.
+                                            parts.push("Black".to_string());
                                         } else if let Some(color) = c.knowledge.known_color {
                                             parts.push(format!("{color:?}"));
                                         }

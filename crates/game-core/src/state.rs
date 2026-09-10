@@ -665,6 +665,58 @@ mod tests {
     }
 
     #[test]
+    fn ruling_out_every_base_color_reveals_a_card_as_black_by_elimination() {
+        let mut g = GameState::new(2, 42, GameRules { multicolor: false, black: true });
+        g.hands.get_mut(&PlayerId(1)).unwrap()[0].card = Card {
+            color: Color::Black,
+            number: 3,
+        };
+        let black_id = g.hands[&PlayerId(1)][0].id;
+
+        let colors_to_rule_out = [Color::White, Color::Red, Color::Yellow, Color::Green, Color::Blue];
+        for (i, &color) in colors_to_rule_out.iter().enumerate() {
+            // A throwaway second card in the same hand, recolored each
+            // round to match whatever's being clued, purely so the clue
+            // actually touches *something* and isn't rejected as
+            // ClueMatchesNothing.
+            g.hands.get_mut(&PlayerId(1)).unwrap()[1].card = Card { color, number: 2 };
+
+            g.apply_action(
+                PlayerId(0),
+                Action::Clue {
+                    target: PlayerId(1),
+                    clue: Clue::Color(color),
+                },
+            )
+            .unwrap();
+
+            let knowledge = &g.hands[&PlayerId(1)]
+                .iter()
+                .find(|hc| hc.id == black_id)
+                .unwrap()
+                .knowledge;
+            let is_last = i == colors_to_rule_out.len() - 1;
+            assert_eq!(
+                knowledge.inferred_black(),
+                is_last,
+                "after ruling out {} of 5 colors",
+                i + 1
+            );
+
+            if !is_last {
+                // Pass the turn back via a discard rather than another
+                // clue — discarding refunds a token instead of spending
+                // one, so 5 rounds of "clue P1, pass back" don't run the
+                // 8-token budget dry. Discards from index 2, well clear of
+                // the black card (0) and the recolored helper (1).
+                let discard_id = g.hands[&PlayerId(1)][2].id;
+                g.apply_action(PlayerId(1), Action::Discard { card_id: discard_id })
+                    .unwrap();
+            }
+        }
+    }
+
+    #[test]
     fn color_clues_never_touch_black_cards() {
         let mut g = GameState::new(2, 42, GameRules { multicolor: false, black: true });
         g.hands.get_mut(&PlayerId(1)).unwrap()[0].card = Card {
@@ -778,6 +830,36 @@ mod tests {
             .unwrap();
 
         assert_eq!(g.score(), 30); // 5 base suits at 5 each, plus black's 5
+        assert_eq!(g.status, GameStatus::Finished(EndReason::PerfectScore));
+    }
+
+    #[test]
+    fn both_optional_suits_together_give_seventy_cards_and_max_score_35() {
+        // Deck/deal size: 5 base suits + multicolor + black, 10 cards each.
+        let g = GameState::new(3, 7, GameRules { multicolor: true, black: true });
+        let dealt: usize = g.hands.values().map(|h| h.len()).sum();
+        assert_eq!(dealt + g.draw_pile.len(), 70);
+        assert_eq!(g.fireworks.len(), 7);
+
+        // Perfect-score check uses the right max (35) when both are on —
+        // exercised end-to-end through a real play, not just computed.
+        let mut g = GameState::new(2, 42, GameRules { multicolor: true, black: true });
+        for color in Color::ALL {
+            g.fireworks.insert(color, 5);
+        }
+        g.fireworks.insert(Color::Multicolor, 5);
+        g.fireworks.insert(Color::Black, 2); // one black play short of complete
+
+        g.hands.get_mut(&PlayerId(0)).unwrap()[0].card = Card {
+            color: Color::Black,
+            number: 1,
+        };
+        let black_one_id = g.hands[&PlayerId(0)][0].id;
+
+        g.apply_action(PlayerId(0), Action::Play { card_id: black_one_id })
+            .unwrap();
+
+        assert_eq!(g.score(), 35); // (5 base + multicolor) * 5, plus black's 5
         assert_eq!(g.status, GameStatus::Finished(EndReason::PerfectScore));
     }
 
