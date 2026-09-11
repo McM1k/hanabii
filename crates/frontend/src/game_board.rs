@@ -24,6 +24,22 @@ fn color_class(c: Color) -> &'static str {
     }
 }
 
+/// A single-letter abbreviation for the "ruled out" marks on own-hand
+/// cards. Only ever called with a base color in practice — a color clue
+/// can never name Multicolor or Black directly, so neither can ever end up
+/// in a card's `not_colors` set — but the match stays exhaustive.
+fn color_initial(c: Color) -> &'static str {
+    match c {
+        Color::White => "W",
+        Color::Red => "R",
+        Color::Yellow => "Y",
+        Color::Green => "G",
+        Color::Blue => "B",
+        Color::Multicolor => "M",
+        Color::Black => "K",
+    }
+}
+
 fn pips(current: u8, max: u8) -> String {
     let filled = "\u{25cf}".repeat(current as usize);
     let empty = "\u{25cb}".repeat((max - current) as usize);
@@ -548,6 +564,62 @@ fn ready_board(
                                         } else {
                                             parts.join(" ")
                                         };
+
+                                        // Ruled-out colors/numbers, shown
+                                        // only while that aspect is still
+                                        // uncertain — once the color (or a
+                                        // black/multicolor inference) or
+                                        // number is already known above,
+                                        // repeating what it *isn't* is just
+                                        // clutter.
+                                        let not_colors_row = (c.knowledge.known_color.is_none()
+                                            && !c.knowledge.inferred_black())
+                                            .then(|| {
+                                                let ruled_out: Vec<Color> = Color::ALL
+                                                    .iter()
+                                                    .copied()
+                                                    .filter(|nc| c.knowledge.not_colors.contains(nc))
+                                                    .collect();
+                                                (!ruled_out.is_empty()).then(|| {
+                                                    let marks = ruled_out
+                                                        .iter()
+                                                        .map(|&nc| {
+                                                            view! {
+                                                                <span class=format!(
+                                                                    "not-mark not-mark-{}",
+                                                                    color_class(nc),
+                                                                )>
+                                                                    {color_initial(nc)}
+                                                                </span>
+                                                            }
+                                                        })
+                                                        .collect_view();
+                                                    view! { <span class="not-row">{marks}</span> }
+                                                })
+                                            })
+                                            .flatten();
+                                        let not_numbers_row = c
+                                            .knowledge
+                                            .known_number
+                                            .is_none()
+                                            .then(|| {
+                                                let mut ruled_out: Vec<u8> =
+                                                    c.knowledge.not_numbers.iter().copied().collect();
+                                                ruled_out.sort_unstable();
+                                                (!ruled_out.is_empty()).then(|| {
+                                                    let marks = ruled_out
+                                                        .iter()
+                                                        .map(|&n| {
+                                                            view! {
+                                                                <span class="not-mark">{n.to_string()}</span>
+                                                            }
+                                                        })
+                                                        .collect_view();
+                                                    view! { <span class="not-row">{marks}</span> }
+                                                })
+                                            })
+                                            .flatten();
+
                                         let card_id = c.id;
                                         view! {
                                             <li
@@ -564,6 +636,8 @@ fn ready_board(
                                                 }
                                             >
                                                 <span class="card-hint">{hint}</span>
+                                                {not_colors_row}
+                                                {not_numbers_row}
                                                 <span class="card-tag">{format!("#{}", c.id.0)}</span>
                                             </li>
                                         }

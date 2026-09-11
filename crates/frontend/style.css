@@ -463,6 +463,40 @@ button:disabled {
   padding: 0.25rem;
   text-align: center;
   line-height: 1.2;
+  /* Unlike every other card, this one can grow a bit taller to fit the
+     ruled-out marks below — the fixed height on .card is for the common,
+     uncluttered case. */
+  height: auto;
+  min-height: 3.1rem;
+}
+
+.not-row {
+  display: flex;
+  justify-content: center;
+  flex-wrap: wrap;
+  gap: 0.1rem;
+}
+
+.not-mark {
+  font-size: 0.55rem;
+  text-decoration: line-through;
+  opacity: 0.85;
+}
+
+.not-mark-white {
+  color: var(--white-fw);
+}
+.not-mark-red {
+  color: var(--red-fw);
+}
+.not-mark-yellow {
+  color: var(--yellow-fw);
+}
+.not-mark-green {
+  color: var(--green-fw);
+}
+.not-mark-blue {
+  color: var(--blue-fw);
 }
 
 .card-hint {
