@@ -6,8 +6,8 @@ use leptos::html::Div;
 use leptos::*;
 
 use game_core::{
-    Action, CardId, ClientMessage, Clue, Color, EndReason, GameStatus, LastMove, PlayerId,
-    VisibleCard, MAX_CLUE_TOKENS, MAX_FUSE_TOKENS,
+    Action, CardId, ClientMessage, Clue, Color, EndReason, GameRules, GameStatus, LastMove,
+    PlayerId, VisibleCard, MAX_CLUE_TOKENS, MAX_FUSE_TOKENS,
 };
 
 use crate::ws::AppContext;
@@ -21,13 +21,16 @@ fn color_class(c: Color) -> &'static str {
         Color::Blue => "blue",
         Color::Multicolor => "multicolor",
         Color::Black => "black",
+        Color::Orange => "orange",
+        Color::Purple => "purple",
     }
 }
 
 /// A single-letter abbreviation for the "ruled out" marks on own-hand
-/// cards. Only ever called with a base color in practice — a color clue
-/// can never name Multicolor or Black directly, so neither can ever end up
-/// in a card's `not_colors` set — but the match stays exhaustive.
+/// cards. Only ever called with a base or plain-optional color in
+/// practice — a color clue can never name Multicolor or Black directly, so
+/// neither can ever end up in a card's `not_colors` set — but the match
+/// stays exhaustive.
 fn color_initial(c: Color) -> &'static str {
     match c {
         Color::White => "W",
@@ -37,6 +40,8 @@ fn color_initial(c: Color) -> &'static str {
         Color::Blue => "B",
         Color::Multicolor => "M",
         Color::Black => "K",
+        Color::Orange => "O",
+        Color::Purple => "P",
     }
 }
 
@@ -59,18 +64,22 @@ fn dragged_card_id(ev: &web_sys::DragEvent) -> Option<CardId> {
 ///
 /// A multicolor card counts as *every* color when receiving a clue (see
 /// `GameState::apply_clue` in game-core), so once a hand holds one, every
-/// base color becomes a legal clue for that hand even if none of its other
-/// cards are actually that color — but multicolor itself can never be the
-/// color named in a clue, so it's never included here. Black is the
-/// opposite case: it has no color at all, so it's excluded outright rather
-/// than ever making a color clue valid.
-fn valid_clues(cards: &[VisibleCard]) -> (Vec<Color>, Vec<u8>) {
+/// cluable color in the game becomes valid for that hand even if none of
+/// its other cards are actually that color — but multicolor itself can
+/// never be the color named in a clue, so it's never included here. Black
+/// is the opposite case: it has no color at all, so it's excluded outright
+/// rather than ever making a color clue valid.
+fn valid_clues(cards: &[VisibleCard], rules: &GameRules) -> (Vec<Color>, Vec<u8>) {
     let has_multicolor = cards
         .iter()
         .any(|c| c.card.map(|card| card.color) == Some(Color::Multicolor));
 
     let mut colors: Vec<Color> = if has_multicolor {
-        Color::ALL.to_vec()
+        rules
+            .active_colors()
+            .into_iter()
+            .filter(|&color| color != Color::Black && color != Color::Multicolor)
+            .collect()
     } else {
         cards
             .iter()
@@ -546,7 +555,7 @@ fn ready_board(
                                             // Abbreviated: the card is too
                                             // narrow to fit "Multicolor".
                                             parts.push("Multi".to_string());
-                                        } else if c.knowledge.inferred_black() {
+                                        } else if c.knowledge.inferred_black(&view.rules) {
                                             // Every base color ruled out by
                                             // a negative clue — the only
                                             // suit left is black, another
@@ -573,11 +582,12 @@ fn ready_board(
                                         // repeating what it *isn't* is just
                                         // clutter.
                                         let not_colors_row = (c.knowledge.known_color.is_none()
-                                            && !c.knowledge.inferred_black())
+                                            && !c.knowledge.inferred_black(&view.rules))
                                             .then(|| {
-                                                let ruled_out: Vec<Color> = Color::ALL
-                                                    .iter()
-                                                    .copied()
+                                                let ruled_out: Vec<Color> = view
+                                                    .rules
+                                                    .active_colors()
+                                                    .into_iter()
                                                     .filter(|nc| c.knowledge.not_colors.contains(nc))
                                                     .collect();
                                                 (!ruled_out.is_empty()).then(|| {
@@ -692,7 +702,7 @@ fn ready_board(
                                 view.current_turn == you && view.status == GameStatus::InProgress;
                             let can_clue = can_act && view.clue_tokens > 0;
 
-                            let (valid_colors, valid_numbers) = valid_clues(&cards);
+                            let (valid_colors, valid_numbers) = valid_clues(&cards, &view.rules);
                             let color_buttons = valid_colors
                                 .iter()
                                 .map(|&color| {

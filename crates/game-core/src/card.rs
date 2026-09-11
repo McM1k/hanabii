@@ -18,6 +18,13 @@ pub enum Color {
     /// firework is built in *descending* order, 5 down to 1, so its card
     /// distribution is mirrored too (three 5s, ..., one 1).
     Black,
+    /// The optional "orange" suit (see [`crate::rules::GameRules::orange`]).
+    /// A perfectly ordinary suit — ascending 1-5, normal clue matching —
+    /// it's just optional.
+    Orange,
+    /// The optional "purple" suit (see [`crate::rules::GameRules::purple`]).
+    /// Just as ordinary as [`Color::Orange`], also optional.
+    Purple,
 }
 
 impl Color {

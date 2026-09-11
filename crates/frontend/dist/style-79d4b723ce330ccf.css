@@ -12,6 +12,8 @@
   --yellow-fw: #e8b647;
   --green-fw: #4c9a6a;
   --blue-fw: #3e7cb1;
+  --orange-fw: #e0762a;
+  --purple-fw: #7d5cc0;
   /* Deliberately not pure black — the page background is already a dark
      navy, so this needs its own visible edge (see the border overrides
      below) to avoid disappearing into it. */
@@ -158,6 +160,21 @@ button:disabled {
   cursor: pointer;
 }
 
+.rule-group {
+  margin-bottom: 1rem;
+}
+
+.rule-toggle-sub {
+  margin-left: 1.4rem;
+  font-size: 0.85rem;
+  color: var(--paper-dim);
+}
+
+.rule-toggle-sub:has(input:disabled) {
+  opacity: 0.5;
+  cursor: default;
+}
+
 .rules-picker .hint {
   margin-top: 0.4rem;
 }
@@ -214,7 +231,9 @@ button:disabled {
 .firework-yellow,
 .firework-green,
 .firework-blue,
-.firework-multicolor {
+.firework-multicolor,
+.firework-orange,
+.firework-purple {
   border-color: transparent;
 }
 .firework-white {
@@ -231,6 +250,12 @@ button:disabled {
 }
 .firework-blue {
   background: var(--blue-fw);
+}
+.firework-orange {
+  background: var(--orange-fw);
+}
+.firework-purple {
+  background: var(--purple-fw);
 }
 .firework-multicolor {
   /* Same idea as .card-multicolor — a flat swatch can't represent "every
@@ -260,6 +285,12 @@ button:disabled {
 .firework-blue .firework-label,
 .firework-blue .firework-value,
 .firework-blue .firework-burst,
+.firework-orange .firework-label,
+.firework-orange .firework-value,
+.firework-orange .firework-burst,
+.firework-purple .firework-label,
+.firework-purple .firework-value,
+.firework-purple .firework-burst,
 .firework-multicolor .firework-label,
 .firework-multicolor .firework-value,
 .firework-multicolor .firework-burst {
@@ -441,6 +472,14 @@ button:disabled {
   background: var(--blue-fw);
   color: var(--paper);
 }
+.card-orange {
+  background: var(--orange-fw);
+  color: var(--night);
+}
+.card-purple {
+  background: var(--purple-fw);
+  color: var(--paper);
+}
 .card-multicolor {
   /* Can't be a flat swatch like the others — it's the wild suit, so it
      reads visually as "every color at once". */
@@ -497,6 +536,12 @@ button:disabled {
 }
 .not-mark-blue {
   color: var(--blue-fw);
+}
+.not-mark-orange {
+  color: var(--orange-fw);
+}
+.not-mark-purple {
+  color: var(--purple-fw);
 }
 
 .card-hint {

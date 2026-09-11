@@ -5,7 +5,7 @@ Axum for the server, Leptos (WASM) for the frontend, WebSockets tying them toget
 
 ## Status
 
-- [x] `game-core` — the rules engine. Compiler-verified, 42/42 tests passing.
+- [x] `game-core` — the rules engine. Compiler-verified, 52/52 tests passing.
 - [x] `server` — Axum + WebSockets, room management. Compiler-verified, 6/6 tests
       passing, join flow tested manually.
 - [x] `frontend` — Leptos UI. Written, **not yet compiler-verified**. This is the
@@ -161,19 +161,25 @@ hanabi/
 
 ## Optional rules
 
-- **Multicolor suit** (`GameRules { multicolor: true }`, toggled in the lobby):
-  adds a 6th, 10-card suit on top of the standard 50. Multicolor cards count as
-  *every* color when receiving a color clue (so a "Red" clue also touches them),
-  but the multicolor suit itself can never be the color named in a clue — same
-  as the standard tabletop variant. Builds its own separate firework, so max
-  score becomes 30 instead of 25.
-- **Black powder suit** (`GameRules { black: true }`, toggled independently of
-  multicolor): adds another 10-card suit with a mirrored 1/2/2/2/3 distribution
-  (three 5s down to one 1). Black has no color at all — no color clue, including
-  naming it directly, ever touches it, the opposite of multicolor's "wild for
-  every clue" — and its firework is built in *descending* order, 5 down to 1,
-  instead of the usual 1 up to 5. Also adds 5 to the max score. Both suits can
-  be on at once (max score 35).
+Four optional suits, each toggled independently in the lobby, any combination:
+
+- **Multicolor** (`multicolor`): a 6th suit, wild for color clues (a "Red" clue
+  also touches multicolor cards) but can never be clued directly.
+- **Black powder** (`black`): a suit with no color at all — no color clue,
+  including naming it directly, ever touches it, the opposite of multicolor's
+  "wild for every clue" — and its firework is built in *descending* order, 5
+  down to 1, with a mirrored 1/2/2/2/3 card distribution (three 5s down to one
+  1) to match.
+- **Orange** / **Purple** (`orange`, `purple`): perfectly ordinary suits,
+  ascending 1-5 like the base five, just optional.
+
+Each of the four adds 5 to the max score and, unless its "short" option below
+is on, 10 cards to the deck (all combined: 90 cards, max score 45).
+
+Each of the four also has its own independent **"short deck"** option
+(`multicolor_short`, `black_short`, `orange_short`, `purple_short`): one copy
+of every rank (5 cards) instead of the usual distribution, making that suit's
+cards irreplaceable. Only matters if that suit's own main flag is also on.
 
 ## Server protocol (v1)
 

@@ -3,6 +3,7 @@ use std::collections::HashSet;
 use serde::{Deserialize, Serialize};
 
 use crate::card::{Clue, Color, Number};
+use crate::rules::GameRules;
 
 /// Everything a player has been told about one of their own cards, built up
 /// clue by clue. Positive info comes from being directly clued; negative
@@ -52,15 +53,23 @@ impl CardKnowledge {
         self.clued_colors.len() > 1
     }
 
-    /// True once every base color has been ruled out by a negative color
-    /// clue (given to the rest of the hand, never touching this card).
-    /// This also rules out multicolor along the way for free: a multicolor
-    /// card is touched by *every* color clue, so it can never accumulate
-    /// even one negative color result, let alone all five — meaning the
-    /// only suit left once all five are ruled out is black. Like
+    /// True once every *other* color actually in play for this game has
+    /// been ruled out by a negative color clue (given to the rest of the
+    /// hand, never touching this card). Needs `rules` rather than just
+    /// assuming the five base colors, since orange and purple are ordinary
+    /// cluable colors too when they're turned on — ruling out only the
+    /// base five wouldn't actually eliminate them as possibilities. This
+    /// also rules out multicolor along the way for free: a multicolor card
+    /// is touched by *every* color clue, so it can never accumulate even
+    /// one negative color result, let alone all of them — meaning the only
+    /// suit left once everything else is ruled out is black. Like
     /// `inferred_multicolor`, this is a hard deduction, not a guess.
-    pub fn inferred_black(&self) -> bool {
-        Color::ALL.iter().all(|c| self.not_colors.contains(c))
+    pub fn inferred_black(&self, rules: &GameRules) -> bool {
+        rules
+            .active_colors()
+            .into_iter()
+            .filter(|&c| c != Color::Black && c != Color::Multicolor)
+            .all(|c| self.not_colors.contains(&c))
     }
 }
 
@@ -107,23 +116,41 @@ mod tests {
 
     #[test]
     fn ruling_out_every_base_color_implies_black() {
+        let rules = GameRules { black: true, ..Default::default() };
         let mut k = CardKnowledge::default();
         for color in [Color::White, Color::Red, Color::Yellow, Color::Green] {
             k.apply_negative(Clue::Color(color));
-            assert!(!k.inferred_black(), "shouldn't be certain before all five are ruled out");
+            assert!(!k.inferred_black(&rules), "shouldn't be certain before all five are ruled out");
         }
         k.apply_negative(Clue::Color(Color::Blue));
-        assert!(k.inferred_black());
+        assert!(k.inferred_black(&rules));
     }
 
     #[test]
     fn a_single_positive_color_clue_rules_out_black_forever() {
+        let rules = GameRules { black: true, ..Default::default() };
         let mut k = CardKnowledge::default();
         for color in [Color::White, Color::Red, Color::Yellow, Color::Green] {
             k.apply_negative(Clue::Color(color));
         }
         // Matched Blue instead of missing it — can't be black after all.
         k.apply_positive(Clue::Color(Color::Blue));
-        assert!(!k.inferred_black());
+        assert!(!k.inferred_black(&rules));
+    }
+
+    #[test]
+    fn an_active_extra_suit_must_also_be_ruled_out_before_inferring_black() {
+        // Orange is turned on alongside black in this game, so ruling out
+        // only the five base colors isn't enough — orange itself hasn't
+        // been eliminated as a possibility yet.
+        let rules = GameRules { black: true, orange: true, ..Default::default() };
+        let mut k = CardKnowledge::default();
+        for color in [Color::White, Color::Red, Color::Yellow, Color::Green, Color::Blue] {
+            k.apply_negative(Clue::Color(color));
+        }
+        assert!(!k.inferred_black(&rules), "orange hasn't been ruled out yet");
+
+        k.apply_negative(Clue::Color(Color::Orange));
+        assert!(k.inferred_black(&rules));
     }
 }

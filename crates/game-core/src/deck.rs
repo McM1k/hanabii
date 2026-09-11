@@ -10,13 +10,23 @@ const NUMBER_COUNTS: [(u8, u8); 5] = [(1, 3), (2, 2), (3, 2), (4, 2), (5, 1)];
 /// 5 is the "starting" rank and should be as common as 1 normally is.
 const REVERSE_NUMBER_COUNTS: [(u8, u8); 5] = [(1, 1), (2, 2), (3, 2), (4, 2), (5, 3)];
 
-/// Builds a deck for the given rules — 50 cards normally, plus 10 more for
-/// each optional suit that's turned on (multicolor, black).
+/// The "short" distribution any optional suit can use instead of its usual
+/// one (see `GameRules::is_short`): one copy of every rank, 5 cards total,
+/// every one of them irreplaceable. Direction doesn't matter here — with a
+/// single copy of each rank, the ascending and mirrored-descending
+/// distributions are identical, so this one template covers both.
+const SHORT_NUMBER_COUNTS: [(u8, u8); 5] = [(1, 1), (2, 1), (3, 1), (4, 1), (5, 1)];
+
+/// Builds a deck for the given rules — 50 cards normally, plus 10 (or 5, if
+/// that suit's "short" option is on) more for each optional suit that's
+/// turned on (multicolor, black, orange, purple).
 pub fn standard_deck(rules: &GameRules) -> Vec<Card> {
     let colors = rules.active_colors();
     let mut deck = Vec::with_capacity(colors.len() * 10);
     for color in colors {
-        let counts = if color == Color::Black {
+        let counts = if rules.is_short(color) {
+            SHORT_NUMBER_COUNTS
+        } else if color == Color::Black {
             REVERSE_NUMBER_COUNTS
         } else {
             NUMBER_COUNTS
@@ -79,7 +89,7 @@ mod tests {
 
     #[test]
     fn multicolor_rule_adds_a_sixth_ten_card_suit() {
-        let rules = GameRules { multicolor: true, black: false };
+        let rules = GameRules { multicolor: true, black: false, ..Default::default() };
         let deck = standard_deck(&rules);
         assert_eq!(deck.len(), 60);
         let multi: Vec<_> = deck.iter().filter(|c| c.color == Color::Multicolor).collect();
@@ -89,7 +99,7 @@ mod tests {
 
     #[test]
     fn black_rule_adds_a_mirrored_ten_card_suit() {
-        let rules = GameRules { multicolor: false, black: true };
+        let rules = GameRules { multicolor: false, black: true, ..Default::default() };
         let deck = standard_deck(&rules);
         assert_eq!(deck.len(), 60);
         let black: Vec<_> = deck.iter().filter(|c| c.color == Color::Black).collect();
@@ -104,8 +114,65 @@ mod tests {
 
     #[test]
     fn both_optional_suits_stack_to_seventy_cards() {
-        let rules = GameRules { multicolor: true, black: true };
+        let rules = GameRules { multicolor: true, black: true, ..Default::default() };
         assert_eq!(standard_deck(&rules).len(), 70);
+    }
+
+    #[test]
+    fn orange_and_purple_are_plain_ten_card_suits() {
+        let rules = GameRules { orange: true, purple: true, ..Default::default() };
+        let deck = standard_deck(&rules);
+        assert_eq!(deck.len(), 70);
+        for color in [Color::Orange, Color::Purple] {
+            let of_color: Vec<_> = deck.iter().filter(|c| c.color == color).collect();
+            assert_eq!(of_color.len(), 10);
+            assert_eq!(of_color.iter().filter(|c| c.number == 5).count(), 1);
+            assert_eq!(of_color.iter().filter(|c| c.number == 1).count(), 3);
+        }
+    }
+
+    #[test]
+    fn all_four_optional_suits_stack_to_ninety_cards() {
+        let rules = GameRules {
+            multicolor: true,
+            black: true,
+            orange: true,
+            purple: true,
+            ..Default::default()
+        };
+        assert_eq!(standard_deck(&rules).len(), 90);
+    }
+
+    #[test]
+    fn short_option_shrinks_a_suit_to_one_of_each_rank() {
+        let rules = GameRules {
+            multicolor: true,
+            multicolor_short: true,
+            orange: true,
+            // orange_short deliberately left off, for contrast
+            ..Default::default()
+        };
+        let deck = standard_deck(&rules);
+
+        let multi: Vec<_> = deck.iter().filter(|c| c.color == Color::Multicolor).collect();
+        assert_eq!(multi.len(), 5);
+        for rank in 1..=5 {
+            assert_eq!(multi.iter().filter(|c| c.number == rank).count(), 1);
+        }
+
+        let orange: Vec<_> = deck.iter().filter(|c| c.color == Color::Orange).collect();
+        assert_eq!(orange.len(), 10); // untouched: its own short flag is off
+    }
+
+    #[test]
+    fn short_black_is_still_five_cards_one_of_each_rank() {
+        let rules = GameRules { black: true, black_short: true, ..Default::default() };
+        let deck = standard_deck(&rules);
+        let black: Vec<_> = deck.iter().filter(|c| c.color == Color::Black).collect();
+        assert_eq!(black.len(), 5);
+        for rank in 1..=5 {
+            assert_eq!(black.iter().filter(|c| c.number == rank).count(), 1);
+        }
     }
 
     #[test]

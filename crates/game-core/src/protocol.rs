@@ -122,9 +122,9 @@ mod tests {
 
     #[test]
     fn view_carries_the_game_rules() {
-        let g = GameState::new(2, 5, GameRules { multicolor: true, black: false });
+        let g = GameState::new(2, 5, GameRules { multicolor: true, black: false, ..Default::default() });
         let view = g.view_for(PlayerId(0));
-        assert_eq!(view.rules, GameRules { multicolor: true, black: false });
+        assert_eq!(view.rules, GameRules { multicolor: true, black: false, ..Default::default() });
         assert_eq!(view.fireworks.len(), 6);
     }
 }

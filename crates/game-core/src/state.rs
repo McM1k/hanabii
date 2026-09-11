@@ -496,7 +496,7 @@ mod tests {
 
     #[test]
     fn multicolor_rule_deals_from_a_sixty_card_deck() {
-        let g = GameState::new(3, 7, GameRules { multicolor: true, black: false });
+        let g = GameState::new(3, 7, GameRules { multicolor: true, black: false, ..Default::default() });
         let dealt: usize = g.hands.values().map(|h| h.len()).sum();
         assert_eq!(dealt + g.draw_pile.len(), 60);
         assert_eq!(g.fireworks.len(), 6);
@@ -545,7 +545,7 @@ mod tests {
 
     #[test]
     fn multicolor_card_is_touched_by_any_color_clue() {
-        let mut g = GameState::new(2, 42, GameRules { multicolor: true, black: false });
+        let mut g = GameState::new(2, 42, GameRules { multicolor: true, black: false, ..Default::default() });
         g.hands.get_mut(&PlayerId(1)).unwrap()[0].card = Card {
             color: Color::Multicolor,
             number: 2,
@@ -577,8 +577,44 @@ mod tests {
     }
 
     #[test]
+    fn orange_and_purple_behave_like_any_other_suit() {
+        let mut g = GameState::new(
+            2,
+            42,
+            GameRules { orange: true, purple: true, ..Default::default() },
+        );
+        g.hands.get_mut(&PlayerId(1)).unwrap()[0].card = Card {
+            color: Color::Orange,
+            number: 1,
+        };
+        let orange_id = g.hands[&PlayerId(1)][0].id;
+
+        // Clued normally, exactly like a base color — no wildcard, no
+        // "can't be named directly" restriction.
+        let events = g
+            .apply_action(
+                PlayerId(0),
+                Action::Clue {
+                    target: PlayerId(1),
+                    clue: Clue::Color(Color::Orange),
+                },
+            )
+            .unwrap();
+        match &events[0] {
+            Event::ClueGiven { touched, .. } => assert!(touched.contains(&orange_id)),
+            other => panic!("expected a ClueGiven event, got {other:?}"),
+        }
+
+        // Played in normal ascending order, starting at 1 — not reversed
+        // like black.
+        g.apply_action(PlayerId(1), Action::Play { card_id: orange_id })
+            .unwrap();
+        assert_eq!(*g.fireworks.get(&Color::Orange).unwrap(), 1);
+    }
+
+    #[test]
     fn cannot_clue_multicolor_directly() {
-        let mut g = GameState::new(2, 42, GameRules { multicolor: true, black: false });
+        let mut g = GameState::new(2, 42, GameRules { multicolor: true, black: false, ..Default::default() });
         let result = g.apply_action(
             PlayerId(0),
             Action::Clue {
@@ -591,7 +627,7 @@ mod tests {
 
     #[test]
     fn two_different_color_clues_on_the_same_card_reveal_it_as_multicolor() {
-        let mut g = GameState::new(2, 42, GameRules { multicolor: true, black: false });
+        let mut g = GameState::new(2, 42, GameRules { multicolor: true, black: false, ..Default::default() });
         g.hands.get_mut(&PlayerId(1)).unwrap()[0].card = Card {
             color: Color::Multicolor,
             number: 3,
@@ -653,7 +689,7 @@ mod tests {
 
     #[test]
     fn cannot_clue_black_directly() {
-        let mut g = GameState::new(2, 42, GameRules { multicolor: false, black: true });
+        let mut g = GameState::new(2, 42, GameRules { multicolor: false, black: true, ..Default::default() });
         let result = g.apply_action(
             PlayerId(0),
             Action::Clue {
@@ -666,7 +702,7 @@ mod tests {
 
     #[test]
     fn ruling_out_every_base_color_reveals_a_card_as_black_by_elimination() {
-        let mut g = GameState::new(2, 42, GameRules { multicolor: false, black: true });
+        let mut g = GameState::new(2, 42, GameRules { multicolor: false, black: true, ..Default::default() });
         g.hands.get_mut(&PlayerId(1)).unwrap()[0].card = Card {
             color: Color::Black,
             number: 3,
@@ -697,7 +733,7 @@ mod tests {
                 .knowledge;
             let is_last = i == colors_to_rule_out.len() - 1;
             assert_eq!(
-                knowledge.inferred_black(),
+                knowledge.inferred_black(&g.rules),
                 is_last,
                 "after ruling out {} of 5 colors",
                 i + 1
@@ -718,7 +754,7 @@ mod tests {
 
     #[test]
     fn color_clues_never_touch_black_cards() {
-        let mut g = GameState::new(2, 42, GameRules { multicolor: false, black: true });
+        let mut g = GameState::new(2, 42, GameRules { multicolor: false, black: true, ..Default::default() });
         g.hands.get_mut(&PlayerId(1)).unwrap()[0].card = Card {
             color: Color::Black,
             number: 3,
@@ -756,7 +792,7 @@ mod tests {
 
     #[test]
     fn black_suit_must_be_played_in_descending_order() {
-        let mut g = GameState::new(2, 42, GameRules { multicolor: false, black: true });
+        let mut g = GameState::new(2, 42, GameRules { multicolor: false, black: true, ..Default::default() });
         g.hands.get_mut(&PlayerId(0)).unwrap()[0].card = Card {
             color: Color::Black,
             number: 1,
@@ -783,7 +819,7 @@ mod tests {
 
     #[test]
     fn completing_black_suit_refunds_a_clue_token() {
-        let mut g = GameState::new(2, 42, GameRules { multicolor: false, black: true });
+        let mut g = GameState::new(2, 42, GameRules { multicolor: false, black: true, ..Default::default() });
         // Fast-forward to 5,4,3,2 already played, with a token spent so a
         // refund is actually observable.
         g.fireworks.insert(Color::Black, 2);
@@ -804,7 +840,7 @@ mod tests {
 
     #[test]
     fn score_counts_black_progress_correctly_despite_descending_ranks() {
-        let mut g = GameState::new(2, 42, GameRules { multicolor: false, black: true });
+        let mut g = GameState::new(2, 42, GameRules { multicolor: false, black: true, ..Default::default() });
         // Two black cards played (5 then 4) is 2 points, even though the
         // rank sitting on top of the pile (4) is *lower* than the count
         // would suggest for a normal ascending suit.
@@ -814,7 +850,7 @@ mod tests {
 
     #[test]
     fn perfect_score_with_black_uses_the_right_max() {
-        let mut g = GameState::new(2, 42, GameRules { multicolor: false, black: true });
+        let mut g = GameState::new(2, 42, GameRules { multicolor: false, black: true, ..Default::default() });
         for color in Color::ALL {
             g.fireworks.insert(color, 5);
         }
@@ -836,14 +872,14 @@ mod tests {
     #[test]
     fn both_optional_suits_together_give_seventy_cards_and_max_score_35() {
         // Deck/deal size: 5 base suits + multicolor + black, 10 cards each.
-        let g = GameState::new(3, 7, GameRules { multicolor: true, black: true });
+        let g = GameState::new(3, 7, GameRules { multicolor: true, black: true, ..Default::default() });
         let dealt: usize = g.hands.values().map(|h| h.len()).sum();
         assert_eq!(dealt + g.draw_pile.len(), 70);
         assert_eq!(g.fireworks.len(), 7);
 
         // Perfect-score check uses the right max (35) when both are on —
         // exercised end-to-end through a real play, not just computed.
-        let mut g = GameState::new(2, 42, GameRules { multicolor: true, black: true });
+        let mut g = GameState::new(2, 42, GameRules { multicolor: true, black: true, ..Default::default() });
         for color in Color::ALL {
             g.fireworks.insert(color, 5);
         }
