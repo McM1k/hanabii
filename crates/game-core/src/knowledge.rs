@@ -71,6 +71,22 @@ impl CardKnowledge {
             .filter(|&c| c != Color::Black && c != Color::Multicolor)
             .all(|c| self.not_colors.contains(&c))
     }
+
+    /// True if this card could still plausibly be the multicolor wildcard,
+    /// given what's been clued so far. Requires: the multicolor suit is
+    /// actually in this game, exactly one color has matched so far (two
+    /// different ones would already be `inferred_multicolor` — a certainty,
+    /// not a maybe), and — the part that's easy to miss — no color clue has
+    /// ever come back *negative* on this card. A multicolor card matches
+    /// every color clue unconditionally, so even a single miss on some
+    /// other color proves it isn't multicolor, no matter how many clues
+    /// matched earlier.
+    pub fn could_be_multicolor(&self, rules: &GameRules) -> bool {
+        rules.multicolor
+            && self.known_color.is_some()
+            && !self.inferred_multicolor()
+            && self.not_colors.is_empty()
+    }
 }
 
 #[cfg(test)]
@@ -152,5 +168,54 @@ mod tests {
 
         k.apply_negative(Clue::Color(Color::Orange));
         assert!(k.inferred_black(&rules));
+    }
+
+    #[test]
+    fn a_single_color_match_could_still_be_multicolor() {
+        let rules = GameRules { multicolor: true, ..Default::default() };
+        let mut k = CardKnowledge::default();
+        assert!(!k.could_be_multicolor(&rules), "nothing clued yet");
+
+        k.apply_positive(Clue::Color(Color::Red));
+        assert!(k.could_be_multicolor(&rules));
+    }
+
+    #[test]
+    fn a_later_negative_color_clue_rules_out_multicolor() {
+        // Exactly the scenario a player would hit in a real game: clued
+        // Red (matched), then Blue is clued to the rest of the hand and
+        // this card is *not* touched. A multicolor card would have to
+        // match every color clue, so missing this one proves it can't be
+        // multicolor after all — even though only one color has ever
+        // matched.
+        let rules = GameRules { multicolor: true, ..Default::default() };
+        let mut k = CardKnowledge::default();
+        k.apply_positive(Clue::Color(Color::Red));
+        assert!(k.could_be_multicolor(&rules));
+
+        k.apply_negative(Clue::Color(Color::Blue));
+        assert!(!k.could_be_multicolor(&rules));
+        // The known color itself is untouched by this.
+        assert_eq!(k.known_color, Some(Color::Red));
+    }
+
+    #[test]
+    fn matching_a_second_different_color_is_certainty_not_ambiguity() {
+        // Once inferred_multicolor fires, could_be_multicolor should no
+        // longer claim it's just a maybe — it's a known fact at that point.
+        let rules = GameRules { multicolor: true, ..Default::default() };
+        let mut k = CardKnowledge::default();
+        k.apply_positive(Clue::Color(Color::Red));
+        k.apply_positive(Clue::Color(Color::Blue));
+        assert!(k.inferred_multicolor());
+        assert!(!k.could_be_multicolor(&rules));
+    }
+
+    #[test]
+    fn could_be_multicolor_is_false_when_the_rule_is_off() {
+        let rules = GameRules::default();
+        let mut k = CardKnowledge::default();
+        k.apply_positive(Clue::Color(Color::Red));
+        assert!(!k.could_be_multicolor(&rules));
     }
 }

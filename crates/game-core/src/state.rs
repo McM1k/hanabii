@@ -688,6 +688,78 @@ mod tests {
     }
 
     #[test]
+    fn a_negative_clue_on_a_different_color_rules_out_multicolor_for_a_real_card() {
+        let mut g = GameState::new(2, 42, GameRules { multicolor: true, black: false, ..Default::default() });
+        g.hands.get_mut(&PlayerId(1)).unwrap()[0].card = Card {
+            color: Color::Red,
+            number: 2,
+        };
+        let red_id = g.hands[&PlayerId(1)][0].id;
+        // A real blue card elsewhere in the hand so the third clue below
+        // actually touches something.
+        g.hands.get_mut(&PlayerId(1)).unwrap()[1].card = Card {
+            color: Color::Blue,
+            number: 4,
+        };
+        // Pinned so the "pass the turn back" clue is guaranteed to touch
+        // something, regardless of what the seed dealt.
+        g.hands.get_mut(&PlayerId(0)).unwrap()[0].card = Card {
+            color: Color::White,
+            number: 1,
+        };
+
+        // Turn 1: clue the red card about Red — one color matched so far,
+        // so it's still ambiguous with multicolor.
+        g.apply_action(
+            PlayerId(0),
+            Action::Clue {
+                target: PlayerId(1),
+                clue: Clue::Color(Color::Red),
+            },
+        )
+        .unwrap();
+        let knowledge_after_red_clue = &g.hands[&PlayerId(1)]
+            .iter()
+            .find(|hc| hc.id == red_id)
+            .unwrap()
+            .knowledge;
+        assert!(knowledge_after_red_clue.could_be_multicolor(&g.rules));
+
+        // Turn 2: pass the turn back.
+        g.apply_action(
+            PlayerId(1),
+            Action::Clue {
+                target: PlayerId(0),
+                clue: Clue::Color(Color::White),
+            },
+        )
+        .unwrap();
+
+        // Turn 3: clue Blue — touches the *other* card, not the red one.
+        // A multicolor card would have matched this too, so missing it
+        // proves the red card really is just red.
+        g.apply_action(
+            PlayerId(0),
+            Action::Clue {
+                target: PlayerId(1),
+                clue: Clue::Color(Color::Blue),
+            },
+        )
+        .unwrap();
+
+        let knowledge = &g.hands[&PlayerId(1)]
+            .iter()
+            .find(|hc| hc.id == red_id)
+            .unwrap()
+            .knowledge;
+        assert!(
+            !knowledge.could_be_multicolor(&g.rules),
+            "a negative clue on another color rules out multicolor, even with only one color ever matched"
+        );
+        assert_eq!(knowledge.known_color, Some(Color::Red));
+    }
+
+    #[test]
     fn cannot_clue_black_directly() {
         let mut g = GameState::new(2, 42, GameRules { multicolor: false, black: true, ..Default::default() });
         let result = g.apply_action(

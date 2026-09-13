@@ -572,13 +572,18 @@ fn ready_board(
                                             parts.push("Black".to_string());
                                         } else if let Some(color) = c.knowledge.known_color {
                                             parts.push(format!("{color:?}"));
-                                            if view.rules.multicolor {
+                                            if c.knowledge.could_be_multicolor(&view.rules) {
                                                 // A single color clue could
                                                 // still be explained by the
                                                 // multicolor wildcard rather
                                                 // than the color itself —
                                                 // flag that ambiguity rather
                                                 // than silently picking one.
+                                                // Stops applying the moment
+                                                // any other color clue comes
+                                                // back negative, since a
+                                                // multicolor card could never
+                                                // miss one.
                                                 parts.push("M?".to_string());
                                             }
                                         }
