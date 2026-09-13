@@ -189,14 +189,20 @@ button:disabled {
 
 .fireworks {
   display: flex;
-  gap: 0.75rem;
+  flex-wrap: wrap;
+  gap: 0.4rem;
   margin-bottom: 1rem;
 }
 
 .firework {
+  position: relative;
   flex: 1;
+  /* Keeps room for the burst icon even once several optional suits are
+     active — beyond this, tiles wrap to another row instead of squeezing
+     narrower than their content. */
+  min-width: 4.5rem;
   text-align: center;
-  padding: 1rem 0.5rem;
+  padding: 1rem 0.3rem;
   border-radius: 4px;
   background: var(--night);
   border: 1px solid var(--night-softer);
@@ -301,6 +307,21 @@ button:disabled {
 .firework-black .firework-label,
 .firework-black .firework-value,
 .firework-black .firework-burst {
+  color: var(--paper);
+}
+
+.firework-short-badge {
+  /* Its own self-contained chip rather than trying to match each tile's
+     text color — stays legible regardless of what's underneath. */
+  position: absolute;
+  top: 2px;
+  right: 3px;
+  font-size: 0.55rem;
+  font-weight: 600;
+  line-height: 1;
+  padding: 0.1rem 0.25rem;
+  border-radius: 3px;
+  background: var(--night);
   color: var(--paper);
 }
 
@@ -494,19 +515,23 @@ button:disabled {
   border-color: var(--paper-dim);
 }
 
-.card-unknown {
-  background: var(--night-softer);
-  color: var(--paper-dim);
+.card-own {
+  position: relative;
   flex-direction: column;
   gap: 0.15rem;
   padding: 0.25rem;
   text-align: center;
   line-height: 1.2;
-  /* Unlike every other card, this one can grow a bit taller to fit the
-     ruled-out marks below — the fixed height on .card is for the common,
-     uncluttered case. */
+  /* Unlike a simple single-line colored card, this one can grow a bit
+     taller to fit the ruled-out marks below — the fixed height on .card is
+     for the common, uncluttered case. */
   height: auto;
   min-height: 3.1rem;
+}
+
+.card-unknown {
+  background: var(--night-softer);
+  color: var(--paper-dim);
 }
 
 .not-row {
@@ -546,15 +571,19 @@ button:disabled {
 
 .card-hint {
   font-size: 0.72rem;
-  color: var(--paper);
+  /* Was a fixed light color, but the card can now be colored like any
+     other suit once enough is known — inherit whatever text color that
+     suit's rule set instead, so it stays legible either way. */
+  color: inherit;
 }
 
 .card-tag {
   font-size: 0.58rem;
-  color: var(--paper-dim);
+  color: inherit;
+  opacity: 0.75;
 }
 
-.card-unknown[draggable="true"] {
+.card-own[draggable="true"] {
   cursor: grab;
 }
 

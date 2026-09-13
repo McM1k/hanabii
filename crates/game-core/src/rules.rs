@@ -59,22 +59,27 @@ pub struct GameRules {
 
 impl GameRules {
     /// The colors actually in play for a game using these rules, in stable
-    /// display order (the optional suits last, since they're the "bonus"
-    /// ones). This is the set both the deck and the fireworks display are
-    /// built from.
+    /// display order used throughout the app: white, red, orange, yellow,
+    /// green, blue, purple, multicolor, black. This is the set both the
+    /// deck and the fireworks/discard-pile display are built from.
     pub fn active_colors(&self) -> Vec<Color> {
-        let mut colors = Color::ALL.to_vec();
+        let mut colors = Vec::with_capacity(9);
+        colors.push(Color::White);
+        colors.push(Color::Red);
+        if self.orange {
+            colors.push(Color::Orange);
+        }
+        colors.push(Color::Yellow);
+        colors.push(Color::Green);
+        colors.push(Color::Blue);
+        if self.purple {
+            colors.push(Color::Purple);
+        }
         if self.multicolor {
             colors.push(Color::Multicolor);
         }
         if self.black {
             colors.push(Color::Black);
-        }
-        if self.orange {
-            colors.push(Color::Orange);
-        }
-        if self.purple {
-            colors.push(Color::Purple);
         }
         colors
     }
@@ -134,6 +139,31 @@ mod tests {
         assert!(colors.contains(&Color::Black));
         assert!(colors.contains(&Color::Orange));
         assert!(colors.contains(&Color::Purple));
+    }
+
+    #[test]
+    fn active_colors_follows_the_fixed_display_order() {
+        let rules = GameRules {
+            multicolor: true,
+            black: true,
+            orange: true,
+            purple: true,
+            ..Default::default()
+        };
+        assert_eq!(
+            rules.active_colors(),
+            vec![
+                Color::White,
+                Color::Red,
+                Color::Orange,
+                Color::Yellow,
+                Color::Green,
+                Color::Blue,
+                Color::Purple,
+                Color::Multicolor,
+                Color::Black,
+            ]
+        );
     }
 
     #[test]

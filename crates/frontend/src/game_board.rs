@@ -373,8 +373,16 @@ fn ready_board(
                 } else {
                     format!("{color:?}")
                 };
+                let short_badge = view.rules.is_short(color).then(|| {
+                    view! {
+                        <span class="firework-short-badge" title="Short deck: only 1 of each card">
+                            "1×"
+                        </span>
+                    }
+                });
                 view! {
                     <div class=format!("firework firework-{}", color_class(color))>
+                        {short_badge}
                         <span class="firework-label">{suit_label}</span>
                         {firework_burst(progress)}
                         <span class="firework-value">{label}</span>
@@ -564,6 +572,15 @@ fn ready_board(
                                             parts.push("Black".to_string());
                                         } else if let Some(color) = c.knowledge.known_color {
                                             parts.push(format!("{color:?}"));
+                                            if view.rules.multicolor {
+                                                // A single color clue could
+                                                // still be explained by the
+                                                // multicolor wildcard rather
+                                                // than the color itself —
+                                                // flag that ambiguity rather
+                                                // than silently picking one.
+                                                parts.push("M?".to_string());
+                                            }
                                         }
                                         if let Some(number) = c.knowledge.known_number {
                                             parts.push(number.to_string());
@@ -630,10 +647,25 @@ fn ready_board(
                                             })
                                             .flatten();
 
+                                        // Color the card face itself once
+                                        // enough is known, same as other
+                                        // players see it — "card-own" carries
+                                        // the stacked-info layout regardless
+                                        // of which of these applies.
+                                        let color_class_name = if c.knowledge.inferred_multicolor() {
+                                            "card-multicolor".to_string()
+                                        } else if c.knowledge.inferred_black(&view.rules) {
+                                            "card-black".to_string()
+                                        } else if let Some(color) = c.knowledge.known_color {
+                                            format!("card-{}", color_class(color))
+                                        } else {
+                                            "card-unknown".to_string()
+                                        };
+
                                         let card_id = c.id;
                                         view! {
                                             <li
-                                                class="card card-unknown"
+                                                class=format!("card card-own {color_class_name}")
                                                 draggable=if can_act { "true" } else { "false" }
                                                 on:dragstart=move |ev: web_sys::DragEvent| {
                                                     if let Some(dt) = ev.data_transfer() {
