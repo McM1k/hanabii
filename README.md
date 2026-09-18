@@ -5,16 +5,34 @@ Axum for the server, Leptos (WASM) for the frontend, WebSockets tying them toget
 
 ## Status
 
-- [x] `game-core` — the rules engine. Compiler-verified, 52/52 tests passing.
+- [x] `game-core` — the rules engine. Compiler-verified, 61/61 tests passing.
 - [x] `server` — Axum + WebSockets, room management. Compiler-verified, 6/6 tests
       passing, join flow tested manually.
-- [x] `frontend` — Leptos UI. Written, **not yet compiler-verified**. This is the
-      riskiest crate in the project — Leptos's reactive/view-macro API and the
-      `gloo-net` WebSocket client are areas I have real uncertainty about, more
-      than anything in `game-core` or `server`. The hand-swap animation
-      (`<For>` + a hand-rolled FLIP effect in `game_board.rs`) is the single
-      riskiest piece added so far — real DOM measurement code I can't run in my
-      sandbox. Expect this one to take a couple of rounds of fixes.
+- [x] `frontend` — Leptos UI. Compiler-verified every round (zero errors, zero
+      warnings) via a sandbox-only dependency-pinning workaround (see
+      `crates/frontend/Cargo.toml` — never touch the pinned versions there,
+      they're the shippable ones; the workaround happens transiently during
+      Claude's own verification, not in the committed file).
+      **A real regression happened**: the fireworks row got a resize-based
+      "balance tiles evenly across lines" feature whose `NodeRef` was attached
+      to a DOM node living inside a closure that fully rebuilds on every game
+      state update. A `create_effect` watching that ref reactively for "has it
+      mounted" refired on every one of those rebuilds, feeding a signal the
+      same closure read — a reactive loop. A first attempt to fix this forward
+      (gating the effect so it only *acts* once) did not resolve the reported
+      symptoms (drag-and-drop broken, plus a new one: clue-target selection
+      broken) and things got worse, not better. Rather than keep guessing
+      blind against something Claude cannot see run in a real browser, the
+      entire feature was removed and the fireworks row reverted to plain CSS
+      `flex-wrap` (no balancing, just greedy wrap — the behavior from many
+      rounds before this one, confirmed working then). If drag-and-drop or
+      clue-target selection are still broken after this revert, the cause is
+      something else, and the fastest way to find it is the browser console's
+      actual error output — Claude cannot reliably diagnose further from
+      source-reading alone. The general lesson for any future DOM-measurement
+      feature: a `NodeRef`/signal pairing where the ref's owning element lives
+      inside a closure that rebuilds in response to the *same* signal is a
+      reactive-loop risk.
 
 ## Running everything
 
@@ -161,7 +179,7 @@ hanabi/
 
 ## Optional rules
 
-Four optional suits, each toggled independently in the lobby, any combination:
+Toggled independently in the lobby, any combination:
 
 - **Multicolor** (`multicolor`): a 6th suit, wild for color clues (a "Red" clue
   also touches multicolor cards) but can never be clued directly.
@@ -170,16 +188,23 @@ Four optional suits, each toggled independently in the lobby, any combination:
   "wild for every clue" — and its firework is built in *descending* order, 5
   down to 1, with a mirrored 1/2/2/2/3 card distribution (three 5s down to one
   1) to match.
-- **Orange** / **Purple** (`orange`, `purple`): perfectly ordinary suits,
-  ascending 1-5 like the base five, just optional.
+- **Extra colors** (`extra_colors`, 0-2): adds that many perfectly ordinary
+  suits on top of the base five — ascending 1-5, normal clue matching, no
+  special behavior. Picked in priority from colors that aren't white (so
+  another near-white suit never gets confused with the base white one) —
+  currently orange (added first) then purple (added second). One lobby
+  control (a count, not per-color toggles) rather than naming them
+  individually, since which two specific hues fill the slots isn't the point.
 
-Each of the four adds 5 to the max score and, unless its "short" option below
-is on, 10 cards to the deck (all combined: 90 cards, max score 45).
+Multicolor and black each add 5 to the max score; each extra color does too.
+Each also adds 10 cards to the deck unless its "short" option below is on (all
+combined: 90 cards, max score 45).
 
-Each of the four also has its own independent **"short deck"** option
-(`multicolor_short`, `black_short`, `orange_short`, `purple_short`): one copy
-of every rank (5 cards) instead of the usual distribution, making that suit's
-cards irreplaceable. Only matters if that suit's own main flag is also on.
+Each also has its own independent **"short deck"** option (`multicolor_short`,
+`black_short`, `extra_colors_short` — the last applies uniformly to however
+many extra colors are added): one copy of every rank (5 cards) instead of the
+usual distribution, making those cards irreplaceable. Only matters if the
+corresponding suit(s) are actually active.
 
 ## Server protocol (v1)
 

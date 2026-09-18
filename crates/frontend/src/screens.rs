@@ -101,6 +101,51 @@ fn suit_rule_toggle(
     }
 }
 
+/// Renders the "extra colors" lobby control: a 0-2 count selector (picked
+/// in priority from ordinary, non-special suits — orange first, then
+/// purple) and a shared "short deck" sub-toggle that applies uniformly to
+/// however many are added. Kept separate from `suit_rule_toggle` since its
+/// shape is a count, not a plain on/off flag.
+fn extra_colors_control(ctx: AppContext) -> impl IntoView {
+    let on_change_count = move |ev: leptos::ev::Event| {
+        let value: u8 = event_target_value(&ev).parse().unwrap_or(0).min(2);
+        let mut rules = ctx.rules.get_untracked();
+        rules.extra_colors = value;
+        ctx.send(ClientMessage::SetRules { rules });
+    };
+    let on_toggle_short = move |_| {
+        let mut rules = ctx.rules.get_untracked();
+        rules.extra_colors_short = !rules.extra_colors_short;
+        ctx.send(ClientMessage::SetRules { rules });
+    };
+
+    view! {
+        <div class="rule-group">
+            <label class="rule-select">
+                <span>"Extra colors"</span>
+                <select
+                    prop:value=move || ctx.rules.get().extra_colors.to_string()
+                    on:change=on_change_count
+                >
+                    <option value="0">"0"</option>
+                    <option value="1">"1"</option>
+                    <option value="2">"2"</option>
+                </select>
+            </label>
+            <p class="hint">"Adds ordinary extra suits on top of the base five — orange first, then purple — no special behavior, just more to track. Adds 5 to the max score per extra color."</p>
+            <label class="rule-toggle rule-toggle-sub">
+                <input
+                    type="checkbox"
+                    prop:checked=move || ctx.rules.get().extra_colors_short
+                    disabled=move || ctx.rules.get().extra_colors == 0
+                    on:change=on_toggle_short
+                />
+                <span>"Only 1 of each card (harder)"</span>
+            </label>
+        </div>
+    }
+}
+
 #[component]
 pub fn Lobby() -> impl IntoView {
     let ctx = use_context::<AppContext>().expect("AppContext should be provided by App");
@@ -145,24 +190,7 @@ pub fn Lobby() -> impl IntoView {
                     |r| r.black_short,
                     |r, v| r.black_short = v,
                 )}
-                {suit_rule_toggle(
-                    ctx,
-                    "Orange suit",
-                    "Adds an ordinary extra suit — no special behavior, just more to keep track of. Adds 5 to the max score.",
-                    |r| r.orange,
-                    |r, v| r.orange = v,
-                    |r| r.orange_short,
-                    |r, v| r.orange_short = v,
-                )}
-                {suit_rule_toggle(
-                    ctx,
-                    "Purple suit",
-                    "Adds another ordinary extra suit, same as orange. Adds 5 to the max score.",
-                    |r| r.purple,
-                    |r, v| r.purple = v,
-                    |r| r.purple_short,
-                    |r, v| r.purple_short = v,
-                )}
+                {extra_colors_control(ctx)}
             </div>
 
             <button on:click=on_start disabled=move || ctx.roster.get().len() < 2>

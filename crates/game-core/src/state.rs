@@ -581,7 +581,7 @@ mod tests {
         let mut g = GameState::new(
             2,
             42,
-            GameRules { orange: true, purple: true, ..Default::default() },
+            GameRules { extra_colors: 2, ..Default::default() },
         );
         g.hands.get_mut(&PlayerId(1)).unwrap()[0].card = Card {
             color: Color::Orange,

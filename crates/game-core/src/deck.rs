@@ -120,7 +120,7 @@ mod tests {
 
     #[test]
     fn orange_and_purple_are_plain_ten_card_suits() {
-        let rules = GameRules { orange: true, purple: true, ..Default::default() };
+        let rules = GameRules { extra_colors: 2, ..Default::default() };
         let deck = standard_deck(&rules);
         assert_eq!(deck.len(), 70);
         for color in [Color::Orange, Color::Purple] {
@@ -136,8 +136,7 @@ mod tests {
         let rules = GameRules {
             multicolor: true,
             black: true,
-            orange: true,
-            purple: true,
+            extra_colors: 2,
             ..Default::default()
         };
         assert_eq!(standard_deck(&rules).len(), 90);
@@ -148,8 +147,8 @@ mod tests {
         let rules = GameRules {
             multicolor: true,
             multicolor_short: true,
-            orange: true,
-            // orange_short deliberately left off, for contrast
+            extra_colors: 1,
+            // extra_colors_short deliberately left off, for contrast
             ..Default::default()
         };
         let deck = standard_deck(&rules);
@@ -161,7 +160,7 @@ mod tests {
         }
 
         let orange: Vec<_> = deck.iter().filter(|c| c.color == Color::Orange).collect();
-        assert_eq!(orange.len(), 10); // untouched: its own short flag is off
+        assert_eq!(orange.len(), 10); // untouched: extra_colors_short is off
     }
 
     #[test]

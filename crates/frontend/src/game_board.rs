@@ -1,5 +1,5 @@
 use std::cell::RefCell;
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::rc::Rc;
 
 use leptos::html::Div;
@@ -327,6 +327,14 @@ fn ready_board(
         None => prev_turn.unwrap_or(you),
     });
 
+    // Remembers each firework's previous value and the discard pile's
+    // previous size, purely to detect "did this just change" so the
+    // relevant tile can briefly flash — the current value alone (inside
+    // `coarse`, which rebuilds fresh on every state update) can't tell
+    // "just happened" from "already true a while ago" without this.
+    let previous_fireworks: Rc<RefCell<HashMap<Color, u8>>> = Rc::new(RefCell::new(HashMap::new()));
+    let previous_discard_count: Rc<RefCell<usize>> = Rc::new(RefCell::new(0));
+
     let coarse = move || {
         let Some(view) = ctx.view.get() else {
             return Vec::<View>::new().into_view();
@@ -336,6 +344,31 @@ fn ready_board(
         let can_act = is_my_turn && view.status == GameStatus::InProgress;
         let can_discard = can_act && view.clue_tokens < MAX_CLUE_TOKENS;
         let active_colors = view.rules.active_colors();
+
+        // Which fireworks just gained a card, and whether the discard
+        // pile just grew — compared against what was stored last render,
+        // so this only fires on the render where it actually happened.
+        let just_played: HashMap<Color, bool> = {
+            let mut prev = previous_fireworks.borrow_mut();
+            let changed: HashMap<Color, bool> = active_colors
+                .iter()
+                .map(|&color| {
+                    let current = *view.fireworks.get(&color).unwrap_or(&0);
+                    let last = *prev.get(&color).unwrap_or(&0);
+                    (color, current > last)
+                })
+                .collect();
+            for &color in &active_colors {
+                prev.insert(color, *view.fireworks.get(&color).unwrap_or(&0));
+            }
+            changed
+        };
+        let just_discarded = {
+            let mut prev = previous_discard_count.borrow_mut();
+            let changed = view.discard_pile.len() > *prev;
+            *prev = view.discard_pile.len();
+            changed
+        };
 
         let status_line = match view.status {
             GameStatus::InProgress => None,
@@ -380,8 +413,12 @@ fn ready_board(
                         </span>
                     }
                 });
+                let mut tile_class = format!("firework firework-{}", color_class(color));
+                if *just_played.get(&color).unwrap_or(&false) {
+                    tile_class.push_str(" firework-flash");
+                }
                 view! {
-                    <div class=format!("firework firework-{}", color_class(color))>
+                    <div class=tile_class>
                         {short_badge}
                         <span class="firework-label">{suit_label}</span>
                         {firework_burst(progress)}
@@ -486,7 +523,12 @@ fn ready_board(
                     {if view.discard_pile.is_empty() {
                         view! { <p class="hint">"Nothing discarded yet."</p> }.into_view()
                     } else {
-                        view! { <div class="discard-groups">{discard_groups}</div> }.into_view()
+                        let class = if just_discarded {
+                            "discard-groups discard-flash"
+                        } else {
+                            "discard-groups"
+                        };
+                        view! { <div class=class>{discard_groups}</div> }.into_view()
                     }}
                     <p class="hint">"Drag a card here to discard it."</p>
                 </div>
@@ -516,6 +558,61 @@ fn ready_board(
                     children=move |pid: PlayerId| {
                         let node_ref = hand_refs_for_children[&pid];
                         let is_you = pid == you;
+                        // Remembers this hand's card ids from the last
+                        // render, purely to spot newly-drawn ones — `None`
+                        // means "nothing rendered yet", so the very first
+                        // render (the initial deal) doesn't get flagged as
+                        // a draw.
+                        let previously_seen_cards: Rc<RefCell<Option<HashSet<CardId>>>> =
+                            Rc::new(RefCell::new(None));
+                        // Which of this hand's cards were drawn recently
+                        // enough to still be worth calling out. A genuine
+                        // signal (not just a CSS animation fired at render
+                        // time) so the highlight is reliably visible for a
+                        // fixed stretch — added the instant a draw is
+                        // detected, removed by its own timeout — regardless
+                        // of whether the underlying `<li>` for that card is
+                        // a freshly-created DOM node or one Leptos reused
+                        // from a previous render.
+                        let (recently_drawn, set_recently_drawn) = create_signal(HashSet::<CardId>::new());
+
+                        // Dedicated to detecting draws and scheduling their
+                        // highlight — kept separate from `card_items` below
+                        // (which only *reads* `recently_drawn`) so nothing
+                        // both reads and writes the same signal from within
+                        // one reactive scope.
+                        create_effect(move |_| {
+                            let Some(view) = ctx.view.get() else { return };
+                            let current_ids: HashSet<CardId> = view
+                                .hands
+                                .get(&pid)
+                                .map(|cards| cards.iter().map(|c| c.id).collect())
+                                .unwrap_or_default();
+
+                            let newly_drawn: HashSet<CardId> = {
+                                let mut prev = previously_seen_cards.borrow_mut();
+                                let result = match prev.as_ref() {
+                                    Some(old_ids) => current_ids.difference(old_ids).copied().collect(),
+                                    None => HashSet::new(),
+                                };
+                                *prev = Some(current_ids);
+                                result
+                            };
+
+                            if !newly_drawn.is_empty() {
+                                set_recently_drawn.update(|set| set.extend(newly_drawn.iter().copied()));
+                                for id in newly_drawn {
+                                    set_timeout(
+                                        move || {
+                                            set_recently_drawn.update(|set| {
+                                                set.remove(&id);
+                                            });
+                                        },
+                                        std::time::Duration::from_millis(1500),
+                                    );
+                                }
+                            }
+                        });
 
                         let hand_class = move || {
                             let is_current = ctx.view.get().map(|v| v.current_turn == pid).unwrap_or(false);
@@ -549,43 +646,35 @@ fn ready_board(
                             let cards = view.hands.get(&pid).cloned().unwrap_or_default();
                             let can_act =
                                 view.current_turn == you && view.status == GameStatus::InProgress;
+                            let recently_drawn_now = recently_drawn.get();
 
                             if is_you {
                                 cards
                                     .iter()
                                     .map(|c| {
                                         let mut parts = Vec::new();
-                                        if c.knowledge.inferred_multicolor() {
-                                            // Matched two *different* color
-                                            // clues — no real single-colored
-                                            // card could do that, so this is
-                                            // a hard deduction, not a guess.
-                                            // Abbreviated: the card is too
-                                            // narrow to fit "Multicolor".
-                                            parts.push("Multi".to_string());
-                                        } else if c.knowledge.inferred_black(&view.rules) {
-                                            // Every base color ruled out by
-                                            // a negative clue — the only
-                                            // suit left is black, another
-                                            // hard deduction rather than a
-                                            // guess.
-                                            parts.push("Black".to_string());
-                                        } else if let Some(color) = c.knowledge.known_color {
-                                            parts.push(format!("{color:?}"));
-                                            if c.knowledge.could_be_multicolor(&view.rules) {
-                                                // A single color clue could
-                                                // still be explained by the
-                                                // multicolor wildcard rather
-                                                // than the color itself —
-                                                // flag that ambiguity rather
-                                                // than silently picking one.
-                                                // Stops applying the moment
-                                                // any other color clue comes
-                                                // back negative, since a
-                                                // multicolor card could never
-                                                // miss one.
-                                                parts.push("M?".to_string());
-                                            }
+                                        // The card's own background already
+                                        // shows its color (or gradient, for
+                                        // multicolor, or the dark black
+                                        // styling) once it's known or
+                                        // inferred — same as how other
+                                        // players' cards never repeat their
+                                        // color as text either. Only the
+                                        // ambiguity flag and the number
+                                        // aren't otherwise visible, so those
+                                        // are all that go in the hint text.
+                                        if c.knowledge.could_be_multicolor(&view.rules) {
+                                            // A single color clue could
+                                            // still be explained by the
+                                            // multicolor wildcard rather
+                                            // than the color itself — flag
+                                            // that ambiguity rather than
+                                            // silently picking one. Stops
+                                            // applying the moment any other
+                                            // color clue comes back
+                                            // negative, since a multicolor
+                                            // card could never miss one.
+                                            parts.push("M?".to_string());
                                         }
                                         if let Some(number) = c.knowledge.known_number {
                                             parts.push(number.to_string());
@@ -668,9 +757,13 @@ fn ready_board(
                                         };
 
                                         let card_id = c.id;
+                                        let mut li_class = format!("card card-own {color_class_name}");
+                                        if recently_drawn_now.contains(&card_id) {
+                                            li_class.push_str(" card-recent-draw");
+                                        }
                                         view! {
                                             <li
-                                                class=format!("card card-own {color_class_name}")
+                                                class=li_class
                                                 draggable=if can_act { "true" } else { "false" }
                                                 on:dragstart=move |ev: web_sys::DragEvent| {
                                                     if let Some(dt) = ev.data_transfer() {
@@ -713,11 +806,14 @@ fn ready_board(
                                                 Clue::Number(n) => card.number == n,
                                             })
                                             .unwrap_or(false);
-                                        let class = if is_targeted {
+                                        let mut class = if is_targeted {
                                             format!("card card-{} card-clue-target", color_class(card.color))
                                         } else {
                                             format!("card card-{}", color_class(card.color))
                                         };
+                                        if recently_drawn_now.contains(&c.id) {
+                                            class.push_str(" card-recent-draw");
+                                        }
                                         view! {
                                             <li class=class>
                                                 {card.number.to_string()}

@@ -159,7 +159,7 @@ mod tests {
         // Orange is turned on alongside black in this game, so ruling out
         // only the five base colors isn't enough — orange itself hasn't
         // been eliminated as a possibility yet.
-        let rules = GameRules { black: true, orange: true, ..Default::default() };
+        let rules = GameRules { black: true, extra_colors: 1, ..Default::default() };
         let mut k = CardKnowledge::default();
         for color in [Color::White, Color::Red, Color::Yellow, Color::Green, Color::Blue] {
             k.apply_negative(Clue::Color(color));

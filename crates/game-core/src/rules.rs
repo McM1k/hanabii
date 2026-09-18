@@ -27,14 +27,14 @@ pub struct GameRules {
     /// usual 1 to 5.
     #[serde(default)]
     pub black: bool,
-    /// Adds a plain "orange" suit — behaves exactly like the five base
-    /// colors (ascending 1-5, normal clue matching), just optional.
+    /// How many ordinary extra suits to add on top of the standard five —
+    /// each behaves exactly like white/red/yellow/green/blue (ascending
+    /// 1-5, normal clue matching), just optional. Clamped to 0-2: picked in
+    /// priority from colors that aren't white, since another near-white
+    /// suit would be easy to confuse with the base white suit and duller
+    /// to look at — currently orange (added first) then purple (second).
     #[serde(default)]
-    pub orange: bool,
-    /// Adds a plain "purple" suit — behaves exactly like the five base
-    /// colors (ascending 1-5, normal clue matching), just optional.
-    #[serde(default)]
-    pub purple: bool,
+    pub extra_colors: u8,
     /// Harder variant of the multicolor suit: only one copy of each rank
     /// (5 cards total) instead of the usual 3/2/2/2/1 (10 cards) — every
     /// card becomes irreplaceable. No effect unless `multicolor` is also on.
@@ -45,17 +45,19 @@ pub struct GameRules {
     /// effect unless `black` is also on.
     #[serde(default)]
     pub black_short: bool,
-    /// Harder variant of the orange suit: only one copy of each rank (5
-    /// cards total) instead of the usual 3/2/2/2/1 (10 cards). No effect
-    /// unless `orange` is also on.
+    /// Harder variant for whichever extra suits `extra_colors` adds: only
+    /// one copy of each rank (5 cards) instead of the usual 3/2/2/2/1 (10
+    /// cards). Applies uniformly to all of them; no effect if
+    /// `extra_colors` is 0.
     #[serde(default)]
-    pub orange_short: bool,
-    /// Harder variant of the purple suit: only one copy of each rank (5
-    /// cards total) instead of the usual 3/2/2/2/1 (10 cards). No effect
-    /// unless `purple` is also on.
-    #[serde(default)]
-    pub purple_short: bool,
+    pub extra_colors_short: bool,
 }
+
+/// The extra suits `extra_colors` draws from, in priority order — the
+/// first `extra_colors` (clamped to this list's length) of these are
+/// added. Kept as one list so `active_colors` and `is_short` can't drift
+/// out of sync with each other about which suit is "extra suit #1" vs "#2".
+const EXTRA_COLOR_PRIORITY: [Color; 2] = [Color::Orange, Color::Purple];
 
 impl GameRules {
     /// The colors actually in play for a game using these rules, in stable
@@ -63,17 +65,18 @@ impl GameRules {
     /// green, blue, purple, multicolor, black. This is the set both the
     /// deck and the fireworks/discard-pile display are built from.
     pub fn active_colors(&self) -> Vec<Color> {
-        let mut colors = Vec::with_capacity(9);
+        let extra_count = (self.extra_colors as usize).min(EXTRA_COLOR_PRIORITY.len());
+        let mut colors = Vec::with_capacity(5 + EXTRA_COLOR_PRIORITY.len() + 2);
         colors.push(Color::White);
         colors.push(Color::Red);
-        if self.orange {
-            colors.push(Color::Orange);
+        if extra_count >= 1 {
+            colors.push(EXTRA_COLOR_PRIORITY[0]);
         }
         colors.push(Color::Yellow);
         colors.push(Color::Green);
         colors.push(Color::Blue);
-        if self.purple {
-            colors.push(Color::Purple);
+        if extra_count >= 2 {
+            colors.push(EXTRA_COLOR_PRIORITY[1]);
         }
         if self.multicolor {
             colors.push(Color::Multicolor);
@@ -93,8 +96,7 @@ impl GameRules {
         match color {
             Color::Multicolor => self.multicolor_short,
             Color::Black => self.black_short,
-            Color::Orange => self.orange_short,
-            Color::Purple => self.purple_short,
+            Color::Orange | Color::Purple => self.extra_colors_short,
             _ => false,
         }
     }
@@ -111,12 +113,10 @@ mod tests {
             GameRules {
                 multicolor: false,
                 black: false,
-                orange: false,
-                purple: false,
+                extra_colors: 0,
                 multicolor_short: false,
                 black_short: false,
-                orange_short: false,
-                purple_short: false,
+                extra_colors_short: false,
             }
         );
     }
@@ -126,17 +126,34 @@ mod tests {
         let plain = GameRules::default();
         assert_eq!(plain.active_colors(), Color::ALL.to_vec());
 
-        let all_four = GameRules {
+        let all = GameRules {
             multicolor: true,
             black: true,
-            orange: true,
-            purple: true,
+            extra_colors: 2,
             ..Default::default()
         };
-        let colors = all_four.active_colors();
+        let colors = all.active_colors();
         assert_eq!(colors.len(), 9);
         assert!(colors.contains(&Color::Multicolor));
         assert!(colors.contains(&Color::Black));
+        assert!(colors.contains(&Color::Orange));
+        assert!(colors.contains(&Color::Purple));
+    }
+
+    #[test]
+    fn one_extra_color_adds_only_orange_not_purple() {
+        let rules = GameRules { extra_colors: 1, ..Default::default() };
+        let colors = rules.active_colors();
+        assert_eq!(colors.len(), 6);
+        assert!(colors.contains(&Color::Orange));
+        assert!(!colors.contains(&Color::Purple));
+    }
+
+    #[test]
+    fn extra_colors_above_two_is_clamped_to_two() {
+        let rules = GameRules { extra_colors: 200, ..Default::default() };
+        let colors = rules.active_colors();
+        assert_eq!(colors.len(), 7);
         assert!(colors.contains(&Color::Orange));
         assert!(colors.contains(&Color::Purple));
     }
@@ -146,8 +163,7 @@ mod tests {
         let rules = GameRules {
             multicolor: true,
             black: true,
-            orange: true,
-            purple: true,
+            extra_colors: 2,
             ..Default::default()
         };
         assert_eq!(
@@ -180,6 +196,17 @@ mod tests {
         // Base colors never have a short option, regardless of any flag —
         // there isn't one to set, but the method stays total.
         assert!(!rules.is_short(Color::Red));
+    }
+
+    #[test]
+    fn extra_colors_short_applies_to_both_extra_suits_uniformly() {
+        let rules = GameRules {
+            extra_colors: 2,
+            extra_colors_short: true,
+            ..Default::default()
+        };
+        assert!(rules.is_short(Color::Orange));
+        assert!(rules.is_short(Color::Purple));
     }
 
     #[test]
