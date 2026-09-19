@@ -17,21 +17,40 @@ const REVERSE_NUMBER_COUNTS: [(u8, u8); 5] = [(1, 1), (2, 2), (3, 2), (4, 2), (5
 /// distributions are identical, so this one template covers both.
 const SHORT_NUMBER_COUNTS: [(u8, u8); 5] = [(1, 1), (2, 1), (3, 1), (4, 1), (5, 1)];
 
-/// Builds a deck for the given rules — 50 cards normally, plus 10 (or 5, if
-/// that suit's "short" option is on) more for each optional suit that's
-/// turned on (multicolor, black, orange, purple).
+/// `NUMBER_COUNTS` extended by one rank for `GameRules::six_cards`: the
+/// previously-unique 5 becomes an ordinary pair, and the new 6 takes over
+/// as the unique top card.
+const NUMBER_COUNTS_SIX: [(u8, u8); 6] = [(1, 3), (2, 2), (3, 2), (4, 2), (5, 2), (6, 1)];
+
+/// `REVERSE_NUMBER_COUNTS` extended by one rank for `GameRules::six_cards`.
+/// This mirrors `NUMBER_COUNTS_SIX` rank-for-rank (three 6s down to one 1)
+/// rather than just swapping 5 and 6 onto the old mirror: 6 becomes the
+/// new "starting" rank a descending suit is built from, so it's the one
+/// that's as common as 1 normally is, and 5 settles to an ordinary pair.
+const REVERSE_NUMBER_COUNTS_SIX: [(u8, u8); 6] = [(1, 1), (2, 2), (3, 2), (4, 2), (5, 2), (6, 3)];
+
+/// `SHORT_NUMBER_COUNTS` extended by one rank for `GameRules::six_cards`:
+/// one copy of every rank 1-6, 6 cards total.
+const SHORT_NUMBER_COUNTS_SIX: [(u8, u8); 6] = [(1, 1), (2, 1), (3, 1), (4, 1), (5, 1), (6, 1)];
+
+/// Builds a deck for the given rules — 50 cards normally, plus 10 (5 if
+/// that suit's "short" option is on, 12/6 instead if `six_cards` is also
+/// on) more for each optional suit that's turned on (multicolor, black,
+/// orange, purple).
 pub fn standard_deck(rules: &GameRules) -> Vec<Card> {
     let colors = rules.active_colors();
     let mut deck = Vec::with_capacity(colors.len() * 10);
     for color in colors {
-        let counts = if rules.is_short(color) {
-            SHORT_NUMBER_COUNTS
-        } else if color == Color::Black {
-            REVERSE_NUMBER_COUNTS
-        } else {
-            NUMBER_COUNTS
+        let is_black = color == Color::Black;
+        let counts: &[(u8, u8)] = match (rules.is_short(color), rules.six_cards, is_black) {
+            (true, false, _) => &SHORT_NUMBER_COUNTS,
+            (true, true, _) => &SHORT_NUMBER_COUNTS_SIX,
+            (false, false, false) => &NUMBER_COUNTS,
+            (false, false, true) => &REVERSE_NUMBER_COUNTS,
+            (false, true, false) => &NUMBER_COUNTS_SIX,
+            (false, true, true) => &REVERSE_NUMBER_COUNTS_SIX,
         };
-        for (number, count) in counts {
+        for &(number, count) in counts {
             for _ in 0..count {
                 deck.push(Card { color, number });
             }
@@ -172,6 +191,58 @@ mod tests {
         for rank in 1..=5 {
             assert_eq!(black.iter().filter(|c| c.number == rank).count(), 1);
         }
+    }
+
+    #[test]
+    fn six_cards_gives_a_normal_color_twelve_cards_with_a_unique_six() {
+        let rules = GameRules { six_cards: true, ..Default::default() };
+        let deck = standard_deck(&rules);
+        for color in Color::ALL {
+            let of_color: Vec<_> = deck.iter().filter(|c| c.color == color).collect();
+            assert_eq!(of_color.len(), 12);
+            assert_eq!(of_color.iter().filter(|c| c.number == 1).count(), 3);
+            assert_eq!(of_color.iter().filter(|c| c.number == 5).count(), 2);
+            assert_eq!(of_color.iter().filter(|c| c.number == 6).count(), 1);
+        }
+    }
+
+    #[test]
+    fn six_cards_gives_black_twelve_cards_mirrored_with_three_sixes() {
+        let rules = GameRules { black: true, six_cards: true, ..Default::default() };
+        let deck = standard_deck(&rules);
+        let black: Vec<_> = deck.iter().filter(|c| c.color == Color::Black).collect();
+        assert_eq!(black.len(), 12);
+        assert_eq!(black.iter().filter(|c| c.number == 1).count(), 1);
+        assert_eq!(black.iter().filter(|c| c.number == 2).count(), 2);
+        assert_eq!(black.iter().filter(|c| c.number == 3).count(), 2);
+        assert_eq!(black.iter().filter(|c| c.number == 4).count(), 2);
+        assert_eq!(black.iter().filter(|c| c.number == 5).count(), 2);
+        assert_eq!(black.iter().filter(|c| c.number == 6).count(), 3);
+    }
+
+    #[test]
+    fn six_cards_and_short_combine_to_one_of_each_rank_up_to_six() {
+        let rules = GameRules {
+            multicolor: true,
+            multicolor_short: true,
+            six_cards: true,
+            ..Default::default()
+        };
+        let deck = standard_deck(&rules);
+        let multi: Vec<_> = deck.iter().filter(|c| c.color == Color::Multicolor).collect();
+        assert_eq!(multi.len(), 6);
+        for rank in 1..=6 {
+            assert_eq!(multi.iter().filter(|c| c.number == rank).count(), 1);
+        }
+    }
+
+    #[test]
+    fn six_cards_off_leaves_the_original_five_rank_distributions_untouched() {
+        let rules = GameRules { black: true, six_cards: false, ..Default::default() };
+        let deck = standard_deck(&rules);
+        let black: Vec<_> = deck.iter().filter(|c| c.color == Color::Black).collect();
+        assert_eq!(black.len(), 10);
+        assert!(black.iter().all(|c| c.number <= 5));
     }
 
     #[test]

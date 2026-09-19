@@ -132,7 +132,7 @@ fn extra_colors_control(ctx: AppContext) -> impl IntoView {
                     <option value="2">"2"</option>
                 </select>
             </label>
-            <p class="hint">"Adds ordinary extra suits on top of the base five — orange first, then purple — no special behavior, just more to track. Adds 5 to the max score per extra color."</p>
+            <p class="hint">"Adds ordinary extra suits on top of the base five — orange first, then purple — no special behavior, just more to track. Adds 5 to the max score per extra color (6 with six-card suits)."</p>
             <label class="rule-toggle rule-toggle-sub">
                 <input
                     type="checkbox"
@@ -142,6 +142,36 @@ fn extra_colors_control(ctx: AppContext) -> impl IntoView {
                 />
                 <span>"Only 1 of each card (harder)"</span>
             </label>
+        </div>
+    }
+}
+
+/// Renders the "six-card suits" lobby control: a single on/off toggle that
+/// extends *every* active suit's distribution by one rank (see
+/// `GameRules::six_cards`), base five included. Unlike the suits above,
+/// this isn't its own suit to turn on — it's a modifier that applies
+/// uniformly to whichever suits end up active, so it gets a plain on/off
+/// block of its own rather than reusing `suit_rule_toggle`'s shape.
+fn six_cards_control(ctx: AppContext) -> impl IntoView {
+    let on_toggle = move |_| {
+        let mut rules = ctx.rules.get_untracked();
+        rules.six_cards = !rules.six_cards;
+        ctx.send(ClientMessage::SetRules { rules });
+    };
+
+    view! {
+        <div class="rule-group">
+            <label class="rule-toggle">
+                <input
+                    type="checkbox"
+                    prop:checked=move || ctx.rules.get().six_cards
+                    on:change=on_toggle
+                />
+                <span>"Six-card suits"</span>
+            </label>
+            <p class="hint">
+                "Adds a 6th card to every active suit. A suit's old unique 5 becomes a pair, and 6 becomes the new unique top card — mirrored for Black powder, where 6 becomes the abundant starting card instead. Adds 1 to the max score per active suit."
+            </p>
         </div>
     }
 }
@@ -175,7 +205,7 @@ pub fn Lobby() -> impl IntoView {
                 {suit_rule_toggle(
                     ctx,
                     "Multicolor suit",
-                    "Adds a 6th suit that's wild for color clues but can't be clued directly. Adds 5 to the max score.",
+                    "Adds a 6th suit that's wild for color clues but can't be clued directly. Adds 5 to the max score (6 with six-card suits).",
                     |r| r.multicolor,
                     |r, v| r.multicolor = v,
                     |r| r.multicolor_short,
@@ -184,13 +214,14 @@ pub fn Lobby() -> impl IntoView {
                 {suit_rule_toggle(
                     ctx,
                     "Black powder suit",
-                    "Adds a suit with no color at all — color clues never touch it — played 5 down to 1 instead of 1 up to 5. Adds 5 to the max score.",
+                    "Adds a suit with no color at all — color clues never touch it — played 5 down to 1 instead of 1 up to 5 (6 down to 1 with six-card suits). Adds 5 to the max score (6 with six-card suits).",
                     |r| r.black,
                     |r, v| r.black = v,
                     |r| r.black_short,
                     |r, v| r.black_short = v,
                 )}
                 {extra_colors_control(ctx)}
+                {six_cards_control(ctx)}
             </div>
 
             <button on:click=on_start disabled=move || ctx.roster.get().len() < 2>

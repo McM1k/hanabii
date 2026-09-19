@@ -19,15 +19,16 @@ fn is_reverse_suit(color: Color) -> bool {
 
 /// The rank that would need to be played next to keep building this suit's
 /// firework, given the rank of whatever's currently on top (0 if nothing's
-/// been played yet). `None` once the suit is complete.
-fn next_expected_rank(color: Color, top: Number) -> Option<Number> {
+/// been played yet) and the game's `max_rank` (5, or 6 if
+/// `GameRules::six_cards` is on). `None` once the suit is complete.
+fn next_expected_rank(color: Color, top: Number, max_rank: Number) -> Option<Number> {
     if is_reverse_suit(color) {
         match top {
-            0 => Some(5),
+            0 => Some(max_rank),
             1 => None,
             n => Some(n - 1),
         }
-    } else if top < 5 {
+    } else if top < max_rank {
         Some(top + 1)
     } else {
         None
@@ -35,12 +36,14 @@ fn next_expected_rank(color: Color, top: Number) -> Option<Number> {
 }
 
 /// How many points a suit's firework is currently worth, given the rank of
-/// whatever's on top (0 if nothing's been played). For a normal suit this
-/// is just the top rank; for a reverse suit it's inverted, since a *lower*
-/// top rank means *more* cards have been played.
-fn points_for(color: Color, top: Number) -> u8 {
+/// whatever's on top (0 if nothing's been played) and the game's
+/// `max_rank`. For a normal suit this is just the top rank; for a reverse
+/// suit it's inverted, since a *lower* top rank means *more* cards have
+/// been played — a complete reverse suit (top rank 1) is worth `max_rank`
+/// points, same as a complete normal suit (top rank `max_rank`).
+pub fn points_for(color: Color, top: Number, max_rank: Number) -> u8 {
     if is_reverse_suit(color) && top != 0 {
-        6 - top
+        max_rank + 1 - top
     } else {
         top
     }
@@ -323,14 +326,16 @@ impl GameState {
         let (played, idx) = self.take_card(player, card_id)?;
         self.hands.get_mut(&player).unwrap().remove(idx);
 
+        let max_rank = self.rules.max_rank();
         let top = *self.fireworks.get(&played.card.color).unwrap();
-        let success = next_expected_rank(played.card.color, top) == Some(played.card.number);
+        let success = next_expected_rank(played.card.color, top, max_rank) == Some(played.card.number);
 
         if success {
             self.fireworks.insert(played.card.color, played.card.number);
             // Completing a firework refunds a clue token — for a reverse
-            // suit that means finishing on a 1, not a 5.
-            let completed = next_expected_rank(played.card.color, played.card.number).is_none();
+            // suit that means finishing on a 1, not a 5 (or 6, with
+            // `six_cards` on).
+            let completed = next_expected_rank(played.card.color, played.card.number, max_rank).is_none();
             if completed && self.clue_tokens < MAX_CLUE_TOKENS {
                 self.clue_tokens += 1;
             }
@@ -438,7 +443,7 @@ impl GameState {
             return None;
         }
 
-        let max_score = self.rules.active_colors().len() as u8 * 5;
+        let max_score = self.rules.max_score();
         if self.fuse_tokens == 0 {
             self.status = GameStatus::Finished(EndReason::FusesExhausted);
         } else if self.score() == max_score {
@@ -460,9 +465,10 @@ impl GameState {
     /// *is* the point count; a reverse suit (Black) is inverted, since it
     /// counts down rather than up — see `points_for`.
     pub fn score(&self) -> u8 {
+        let max_rank = self.rules.max_rank();
         self.fireworks
             .iter()
-            .map(|(&color, &top)| points_for(color, top))
+            .map(|(&color, &top)| points_for(color, top, max_rank))
             .sum()
     }
 }
@@ -968,6 +974,60 @@ mod tests {
             .unwrap();
 
         assert_eq!(g.score(), 35); // (5 base + multicolor) * 5, plus black's 5
+        assert_eq!(g.status, GameStatus::Finished(EndReason::PerfectScore));
+    }
+
+    #[test]
+    fn six_cards_lets_a_normal_suit_play_past_five() {
+        let mut g = GameState::new(2, 42, GameRules { six_cards: true, ..Default::default() });
+        g.fireworks.insert(Color::Red, 5);
+
+        g.hands.get_mut(&PlayerId(0)).unwrap()[0].card = Card { color: Color::Red, number: 6 };
+        let red_six_id = g.hands[&PlayerId(0)][0].id;
+        g.apply_action(PlayerId(0), Action::Play { card_id: red_six_id })
+            .unwrap();
+
+        assert_eq!(*g.fireworks.get(&Color::Red).unwrap(), 6);
+        assert_eq!(g.score(), 6);
+        // The suit is complete now — no rank 7 to expect next.
+        assert_eq!(next_expected_rank(Color::Red, 6, g.rules.max_rank()), None);
+    }
+
+    #[test]
+    fn six_cards_makes_black_start_at_six_not_five() {
+        let mut g = GameState::new(2, 42, GameRules { black: true, six_cards: true, ..Default::default() });
+        g.hands.get_mut(&PlayerId(0)).unwrap()[0].card = Card { color: Color::Black, number: 5 };
+        let black_five_id = g.hands[&PlayerId(0)][0].id;
+
+        // A black 5 first should fail now — with six_cards on, Black
+        // starts at 6, not 5.
+        g.apply_action(PlayerId(0), Action::Play { card_id: black_five_id })
+            .unwrap();
+        assert_eq!(g.fuse_tokens, MAX_FUSE_TOKENS - 1);
+        assert_eq!(*g.fireworks.get(&Color::Black).unwrap(), 0);
+
+        g.hands.get_mut(&PlayerId(1)).unwrap()[0].card = Card { color: Color::Black, number: 6 };
+        let black_six_id = g.hands[&PlayerId(1)][0].id;
+        g.apply_action(PlayerId(1), Action::Play { card_id: black_six_id })
+            .unwrap();
+        assert_eq!(*g.fireworks.get(&Color::Black).unwrap(), 6);
+        assert_eq!(g.score(), 1); // one black card played, worth 1 point
+    }
+
+    #[test]
+    fn six_cards_perfect_score_uses_six_per_suit() {
+        let mut g = GameState::new(2, 42, GameRules { black: true, six_cards: true, ..Default::default() });
+        for color in Color::ALL {
+            g.fireworks.insert(color, 6);
+        }
+        g.fireworks.insert(Color::Black, 2); // one black play short of complete
+
+        g.hands.get_mut(&PlayerId(0)).unwrap()[0].card = Card { color: Color::Black, number: 1 };
+        let black_one_id = g.hands[&PlayerId(0)][0].id;
+        g.apply_action(PlayerId(0), Action::Play { card_id: black_one_id })
+            .unwrap();
+
+        assert_eq!(g.score(), 36); // 5 base suits at 6 each, plus black's 6
         assert_eq!(g.status, GameStatus::Finished(EndReason::PerfectScore));
     }
 

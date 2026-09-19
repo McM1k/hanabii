@@ -6,8 +6,8 @@ use leptos::html::Div;
 use leptos::*;
 
 use game_core::{
-    Action, CardId, ClientMessage, Clue, Color, EndReason, GameRules, GameStatus, LastMove,
-    PlayerId, VisibleCard, MAX_CLUE_TOKENS, MAX_FUSE_TOKENS,
+    points_for, Action, CardId, ClientMessage, Clue, Color, EndReason, GameRules, GameStatus,
+    LastMove, PlayerId, VisibleCard, MAX_CLUE_TOKENS, MAX_FUSE_TOKENS,
 };
 
 use crate::ws::AppContext;
@@ -378,7 +378,7 @@ fn ready_board(
                     EndReason::DeckExhausted => "the deck ran out",
                     EndReason::PerfectScore => "a perfect score",
                 };
-                let max_score = active_colors.len() as u8 * 5;
+                let max_score = view.rules.max_score();
                 Some(format!(
                     "Game over — {why}. Final score: {}/{max_score}",
                     view.score
@@ -392,15 +392,11 @@ fn ready_board(
                 let top = *view.fireworks.get(&color).unwrap_or(&0);
                 let label = if top == 0 { "—".to_string() } else { top.to_string() };
                 // The burst illustration fills in based on how many cards
-                // of this suit have actually been played. For a normal
-                // suit that's just the top rank, but Black counts down (5
-                // first, 1 last), so the raw top rank has to be converted
-                // the other way around to get an actual progress count.
-                let progress = if color == Color::Black && top != 0 {
-                    6 - top
-                } else {
-                    top
-                };
+                // of this suit have actually been played — the same
+                // "points this suit is worth" computation the score itself
+                // uses, since a normal suit's progress is just its top
+                // rank but a reverse suit (Black) counts down instead.
+                let progress = points_for(color, top, view.rules.max_rank());
                 let suit_label = if color == Color::Black {
                     format!("{color:?} \u{2193}")
                 } else {
