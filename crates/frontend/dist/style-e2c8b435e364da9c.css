@@ -349,17 +349,45 @@ button:disabled {
 }
 
 /* A genuinely complete suit (see `next_expected_rank` in game_board.rs)
-   trades its ordinary dark/light icon color for this app's established
-   "something notable happened" accent — the same ember used for the
-   drawn-card highlight — rather than just showing a fuller version of the
-   usual icon. Three class-selectors deep specifically to outrank the
-   two-deep per-suit rules above (`.firework-white .firework-burst` etc.,
-   `.firework-black .firework-burst` included) regardless of source order,
-   since this needs to win for every suit, not just whichever's rule
-   happens to come first. */
+   trades its ordinary dark/light icon color for something more eye-catching
+   — this app's ember accent by default (the same one used for the
+   drawn-card highlight), overridden below for the six suits where ember
+   doesn't contrast well against the tile's own fill (flagged first on
+   Orange). `filter` reads `currentColor` rather than a fixed tint so the
+   glow always matches whichever color actually wins below, instead of
+   needing its own copy of the same override. Three class-selectors deep
+   specifically to outrank the two-deep per-suit rules above
+   (`.firework-white .firework-burst` etc., `.firework-black .firework-burst`
+   included) regardless of source order, since this needs to win for every
+   suit, not just whichever's rule happens to come first. */
 .firework-complete .firework-burst.firework-burst--complete {
   color: var(--ember);
-  filter: drop-shadow(0 0 3px var(--ember-dim));
+  filter: drop-shadow(0 0 3px currentColor);
+}
+
+/* Complementary pairs on the color wheel — red/green, orange/blue,
+   yellow/purple — read clearly against every one of these six tiles.
+   White, Black, and Multicolor have no natural complement in this set, so
+   they keep the ember fallback above. Same specificity as the rule above
+   (three classes), placed after it so these six win the tie for their own
+   suit without needing a fourth class just to be unambiguous. */
+.firework-red.firework-complete .firework-burst--complete {
+  color: var(--green-fw);
+}
+.firework-orange.firework-complete .firework-burst--complete {
+  color: var(--blue-fw);
+}
+.firework-yellow.firework-complete .firework-burst--complete {
+  color: var(--purple-fw);
+}
+.firework-green.firework-complete .firework-burst--complete {
+  color: var(--red-fw);
+}
+.firework-blue.firework-complete .firework-burst--complete {
+  color: var(--orange-fw);
+}
+.firework-purple.firework-complete .firework-burst--complete {
+  color: var(--yellow-fw);
 }
 
 .firework-complete {
