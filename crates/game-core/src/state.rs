@@ -20,8 +20,10 @@ fn is_reverse_suit(color: Color) -> bool {
 /// The rank that would need to be played next to keep building this suit's
 /// firework, given the rank of whatever's currently on top (0 if nothing's
 /// been played yet) and the game's `max_rank` (5, or 6 if
-/// `GameRules::six_cards` is on). `None` once the suit is complete.
-fn next_expected_rank(color: Color, top: Number, max_rank: Number) -> Option<Number> {
+/// `GameRules::six_cards` is on). `None` once the suit is complete — the
+/// frontend also uses that to tell "full for now" (e.g. a six-card suit
+/// sitting at 5/6) apart from "actually done".
+pub fn next_expected_rank(color: Color, top: Number, max_rank: Number) -> Option<Number> {
     if is_reverse_suit(color) {
         match top {
             0 => Some(max_rank),

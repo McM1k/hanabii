@@ -6,8 +6,8 @@ use leptos::html::Div;
 use leptos::*;
 
 use game_core::{
-    points_for, Action, CardId, ClientMessage, Clue, Color, EndReason, GameRules, GameStatus,
-    LastMove, PlayerId, VisibleCard, MAX_CLUE_TOKENS, MAX_FUSE_TOKENS,
+    next_expected_rank, points_for, Action, CardId, ClientMessage, Clue, Color, EndReason,
+    GameRules, GameStatus, LastMove, PlayerId, VisibleCard, MAX_CLUE_TOKENS, MAX_FUSE_TOKENS,
 };
 
 use crate::ws::AppContext;
@@ -169,10 +169,70 @@ const RAYS_FULL: [(&str, &str); 8] = [
     ("30.6", "9.4"),
 ];
 
+/// A denser, larger burst reserved for a suit that's actually *complete*
+/// (every card of that colour has been played) rather than merely at the
+/// same "full" stage `RAYS_FULL` renders at progress 5. The two used to be
+/// indistinguishable, which looked fine for an ordinary 5-card suit (where
+/// progress 5 always meant done) but reads as wrong for a `six_cards` suit
+/// sitting at progress 5 with one play still to go. Twelve rays instead of
+/// eight, reaching further out toward the icon's edge.
+const RAYS_BRILLIANT: [(&str, &str); 12] = [
+    ("37", "20"),
+    ("34.7", "28.5"),
+    ("28.5", "34.7"),
+    ("20", "37"),
+    ("11.5", "34.7"),
+    ("5.3", "28.5"),
+    ("3", "20"),
+    ("5.3", "11.5"),
+    ("11.5", "5.3"),
+    ("20", "3"),
+    ("28.5", "5.3"),
+    ("34.7", "11.5"),
+];
+
 /// A small burst icon that fills in more as `progress` (0-5) increases —
 /// an original take on the physical Hanabi cards, where laying out a suit's
 /// cards in order reveals progressively more of a firework illustration.
-fn firework_burst(progress: u8) -> impl IntoView {
+/// `complete` overrides all of that once the suit is actually finished
+/// (see `RAYS_BRILLIANT`), rendering a bigger, denser burst that also picks
+/// up its own color via the `firework-burst--complete` class instead of
+/// just inheriting the tile's ordinary dark/light icon color — the same
+/// "something notable happened" accent already used for the drawn-card
+/// highlight elsewhere in this app.
+fn firework_burst(progress: u8, complete: bool) -> impl IntoView {
+    if complete {
+        let ray_lines = RAYS_BRILLIANT
+            .iter()
+            .map(|&(x2, y2)| {
+                view! {
+                    <line
+                        x1="20"
+                        y1="20"
+                        x2=x2
+                        y2=y2
+                        stroke="currentColor"
+                        stroke-width="2.2"
+                        stroke-linecap="round"
+                    />
+                }
+            })
+            .collect_view();
+        let tip_dots = RAYS_BRILLIANT
+            .iter()
+            .map(|&(x, y)| view! { <circle cx=x cy=y r="1.6" fill="currentColor" /> })
+            .collect_view();
+
+        return view! {
+            <svg class="firework-burst firework-burst--complete" viewBox="0 0 40 40">
+                {ray_lines}
+                <circle cx="20" cy="20" r="6" fill="currentColor" />
+                {tip_dots}
+            </svg>
+        }
+        .into_view();
+    }
+
     let (rays, dot_r): (&[(&str, &str)], &str) = match progress {
         0 => (&[], "2"),
         1 => (&RAYS_SHORT[0..1], "3"),
@@ -214,6 +274,7 @@ fn firework_burst(progress: u8) -> impl IntoView {
             {tip_dots}
         </svg>
     }
+    .into_view()
 }
 
 /// How long the hand-swap slide takes. Kept in one place since it has to
@@ -397,6 +458,10 @@ fn ready_board(
                 // uses, since a normal suit's progress is just its top
                 // rank but a reverse suit (Black) counts down instead.
                 let progress = points_for(color, top, view.rules.max_rank());
+                // Distinct from "progress is at its highest displayed
+                // stage" — with `six_cards` on, a suit can sit at progress
+                // 5 for one more play before it's actually done.
+                let complete = next_expected_rank(color, top, view.rules.max_rank()).is_none();
                 let suit_label = if color == Color::Black {
                     format!("{color:?} \u{2193}")
                 } else {
@@ -413,11 +478,14 @@ fn ready_board(
                 if *just_played.get(&color).unwrap_or(&false) {
                     tile_class.push_str(" firework-flash");
                 }
+                if complete {
+                    tile_class.push_str(" firework-complete");
+                }
                 view! {
                     <div class=tile_class>
                         {short_badge}
                         <span class="firework-label">{suit_label}</span>
-                        {firework_burst(progress)}
+                        {firework_burst(progress, complete)}
                         <span class="firework-value">{label}</span>
                     </div>
                 }

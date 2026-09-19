@@ -348,6 +348,25 @@ button:disabled {
   color: var(--paper);
 }
 
+/* A genuinely complete suit (see `next_expected_rank` in game_board.rs)
+   trades its ordinary dark/light icon color for this app's established
+   "something notable happened" accent — the same ember used for the
+   drawn-card highlight — rather than just showing a fuller version of the
+   usual icon. Three class-selectors deep specifically to outrank the
+   two-deep per-suit rules above (`.firework-white .firework-burst` etc.,
+   `.firework-black .firework-burst` included) regardless of source order,
+   since this needs to win for every suit, not just whichever's rule
+   happens to come first. */
+.firework-complete .firework-burst.firework-burst--complete {
+  color: var(--ember);
+  filter: drop-shadow(0 0 3px var(--ember-dim));
+}
+
+.firework-complete {
+  border-color: var(--ember);
+  box-shadow: 0 0 10px 1px rgba(201, 122, 61, 0.45);
+}
+
 .firework-short-badge {
   /* Its own self-contained chip rather than trying to match each tile's
      text color — stays legible regardless of what's underneath. */
