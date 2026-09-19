@@ -29,12 +29,18 @@ pub struct GameRules {
     /// 6 down to 1 with `six_cards`) instead of the usual ascending order.
     #[serde(default)]
     pub black: bool,
-    /// How many ordinary extra suits to add on top of the standard five —
-    /// each behaves exactly like white/red/yellow/green/blue (ascending
-    /// 1-5, normal clue matching), just optional. Clamped to 0-2: picked in
-    /// priority from colors that aren't white, since another near-white
-    /// suit would be easy to confuse with the base white suit and duller
-    /// to look at — currently orange (added first) then purple (second).
+    /// How many extra suits to bring in beyond red/yellow/green/blue —
+    /// each behaves exactly like any base suit (ascending 1-5, normal clue
+    /// matching), just optional. Clamped to 0-2, and this isn't "0, 1, or 2
+    /// extra suits added to the same base five" — White itself moves:
+    /// - 0: just the plain five (white/red/yellow/green/blue).
+    /// - 1: Orange and Purple *both* come in, and White drops out to make
+    ///   room — White is already the base suit easiest to mistake for "no
+    ///   clue yet" (a blank card reads a lot like a white one), so it's the
+    ///   one that goes when there's a pair of new suits to make space for.
+    ///   Net effect: 6 suits (red/orange/yellow/green/blue/purple).
+    /// - 2: White comes back on top of that — all seven suits at once
+    ///   (white/red/orange/yellow/green/blue/purple).
     #[serde(default)]
     pub extra_colors: u8,
     /// Harder variant of the multicolor suit: only one copy of each rank
@@ -69,30 +75,31 @@ pub struct GameRules {
     pub six_cards: bool,
 }
 
-/// The extra suits `extra_colors` draws from, in priority order — the
-/// first `extra_colors` (clamped to this list's length) of these are
-/// added. Kept as one list so `active_colors` and `is_short` can't drift
-/// out of sync with each other about which suit is "extra suit #1" vs "#2".
-const EXTRA_COLOR_PRIORITY: [Color; 2] = [Color::Orange, Color::Purple];
-
 impl GameRules {
     /// The colors actually in play for a game using these rules, in stable
     /// display order used throughout the app: white, red, orange, yellow,
-    /// green, blue, purple, multicolor, black. This is the set both the
-    /// deck and the fireworks/discard-pile display are built from.
+    /// green, blue, purple, multicolor, black — except White drops out
+    /// entirely at `extra_colors == 1` (see its doc comment). This is the
+    /// set both the deck and the fireworks/discard-pile display are built
+    /// from.
     pub fn active_colors(&self) -> Vec<Color> {
-        let extra_count = (self.extra_colors as usize).min(EXTRA_COLOR_PRIORITY.len());
-        let mut colors = Vec::with_capacity(5 + EXTRA_COLOR_PRIORITY.len() + 2);
-        colors.push(Color::White);
+        let extra_level = self.extra_colors.min(2);
+        let mut colors = Vec::with_capacity(7 + 2);
+        // White sits out only at exactly 1 — both Orange and Purple come
+        // in together there to make room for it, and it's back the moment
+        // the count reaches 2 (see `extra_colors`'s doc comment for why).
+        if extra_level != 1 {
+            colors.push(Color::White);
+        }
         colors.push(Color::Red);
-        if extra_count >= 1 {
-            colors.push(EXTRA_COLOR_PRIORITY[0]);
+        if extra_level >= 1 {
+            colors.push(Color::Orange);
         }
         colors.push(Color::Yellow);
         colors.push(Color::Green);
         colors.push(Color::Blue);
-        if extra_count >= 2 {
-            colors.push(EXTRA_COLOR_PRIORITY[1]);
+        if extra_level >= 1 {
+            colors.push(Color::Purple);
         }
         if self.multicolor {
             colors.push(Color::Multicolor);
@@ -175,12 +182,25 @@ mod tests {
     }
 
     #[test]
-    fn one_extra_color_adds_only_orange_not_purple() {
+    fn one_extra_color_brings_in_both_orange_and_purple_and_drops_white() {
         let rules = GameRules { extra_colors: 1, ..Default::default() };
         let colors = rules.active_colors();
+        // One more than the plain game — White is out, but both Orange
+        // and Purple are in.
         assert_eq!(colors.len(), 6);
         assert!(colors.contains(&Color::Orange));
-        assert!(!colors.contains(&Color::Purple));
+        assert!(colors.contains(&Color::Purple));
+        assert!(!colors.contains(&Color::White));
+    }
+
+    #[test]
+    fn two_extra_colors_keeps_white_and_adds_orange_and_purple() {
+        let rules = GameRules { extra_colors: 2, ..Default::default() };
+        let colors = rules.active_colors();
+        assert_eq!(colors.len(), 7);
+        assert!(colors.contains(&Color::White));
+        assert!(colors.contains(&Color::Orange));
+        assert!(colors.contains(&Color::Purple));
     }
 
     #[test]
@@ -213,6 +233,22 @@ mod tests {
                 Color::Multicolor,
                 Color::Black,
             ]
+        );
+    }
+
+    #[test]
+    fn one_extra_color_display_order_has_no_white() {
+        let rules = GameRules { extra_colors: 1, ..Default::default() };
+        assert_eq!(
+            rules.active_colors(),
+            vec![
+                Color::Red,
+                Color::Orange,
+                Color::Yellow,
+                Color::Green,
+                Color::Blue,
+                Color::Purple,
+            ],
         );
     }
 
@@ -253,7 +289,8 @@ mod tests {
     #[test]
     fn max_score_is_five_per_active_suit_by_default() {
         let rules = GameRules { multicolor: true, extra_colors: 1, ..Default::default() };
-        // 7 active suits (5 base + orange + multicolor) at 5 each.
+        // 7 active suits (red/orange/yellow/green/blue/purple — no white
+        // at extra_colors: 1 — plus multicolor) at 5 each.
         assert_eq!(rules.max_score(), 35);
     }
 

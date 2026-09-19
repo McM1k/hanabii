@@ -132,7 +132,7 @@ fn extra_colors_control(ctx: AppContext) -> impl IntoView {
                     <option value="2">"2"</option>
                 </select>
             </label>
-            <p class="hint">"Adds ordinary extra suits on top of the base five — orange first, then purple — no special behavior, just more to track. Adds 5 to the max score per extra color (6 with six-card suits)."</p>
+            <p class="hint">"0: just the plain five (max score 25). 1: Orange and Purple both come in and White drops out to make room — 6 suits, max score 30. 2: White comes back too, all seven suits at once, max score 35. (6 per suit instead of 5 with six-card suits.)"</p>
             <label class="rule-toggle rule-toggle-sub">
                 <input
                     type="checkbox"

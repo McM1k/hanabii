@@ -155,18 +155,23 @@ mod tests {
     }
 
     #[test]
-    fn an_active_extra_suit_must_also_be_ruled_out_before_inferring_black() {
-        // Orange is turned on alongside black in this game, so ruling out
-        // only the five base colors isn't enough — orange itself hasn't
-        // been eliminated as a possibility yet.
+    fn every_active_extra_suit_must_be_ruled_out_before_inferring_black() {
+        // Both Orange and Purple are on (via extra_colors: 1) alongside
+        // black in this game — and White has dropped out to make room for
+        // them, see `GameRules::extra_colors` — so ruling out just
+        // red/yellow/green/blue isn't enough: both extra suits have to be
+        // eliminated too, not just one of them.
         let rules = GameRules { black: true, extra_colors: 1, ..Default::default() };
         let mut k = CardKnowledge::default();
-        for color in [Color::White, Color::Red, Color::Yellow, Color::Green, Color::Blue] {
+        for color in [Color::Red, Color::Yellow, Color::Green, Color::Blue] {
             k.apply_negative(Clue::Color(color));
         }
-        assert!(!k.inferred_black(&rules), "orange hasn't been ruled out yet");
+        assert!(!k.inferred_black(&rules), "orange and purple haven't been ruled out yet");
 
         k.apply_negative(Clue::Color(Color::Orange));
+        assert!(!k.inferred_black(&rules), "purple hasn't been ruled out yet");
+
+        k.apply_negative(Clue::Color(Color::Purple));
         assert!(k.inferred_black(&rules));
     }
 

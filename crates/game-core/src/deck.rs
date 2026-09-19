@@ -178,8 +178,8 @@ mod tests {
             assert_eq!(multi.iter().filter(|c| c.number == rank).count(), 1);
         }
 
-        let orange: Vec<_> = deck.iter().filter(|c| c.color == Color::Orange).collect();
-        assert_eq!(orange.len(), 10); // untouched: extra_colors_short is off
+        let purple: Vec<_> = deck.iter().filter(|c| c.color == Color::Purple).collect();
+        assert_eq!(purple.len(), 10); // untouched: extra_colors_short is off
     }
 
     #[test]
