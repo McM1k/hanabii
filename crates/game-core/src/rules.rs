@@ -1,6 +1,6 @@
 use serde::{Deserialize, Serialize};
 
-use crate::card::Color;
+use crate::card::{Card, Clue, Color};
 
 /// Optional variant rules a room can toggle in the lobby before starting a
 /// game. Kept as a small `Copy` struct so it can ride along on `SetRules`,
@@ -73,9 +73,56 @@ pub struct GameRules {
     /// `max_rank`/`max_score` for how this feeds into scoring.
     #[serde(default)]
     pub six_cards: bool,
+    /// The "hanabii" game mode (two i's — the real deal): a fixed preset
+    /// that *replaces* every other option here rather than combining with
+    /// them. See [`GameRules::normalized`] for exactly what it forces.
+    ///
+    /// It plays like a game with six colors (red, orange, yellow, green,
+    /// blue, purple) and six-card suits (3/2/2/2/2/1 of ranks 1-6 per
+    /// color, 72 cards, max score 36) — plus its own color-clue rule:
+    /// - Only the three primary colors (red, yellow, blue) can be named in
+    ///   a color clue.
+    /// - Every other color is mixed from primaries — orange is red +
+    ///   yellow, green is yellow + blue, purple is red + blue — and a card
+    ///   is touched by a primary clue when that primary is one of its
+    ///   ingredients. So a red clue touches red, orange *and* purple cards.
+    ///
+    /// Number clues are the same as ever. See [`GameRules::cluable_colors`]
+    /// and [`GameRules::color_clue_touches`] for the clue rules themselves.
+    #[serde(default)]
+    pub hanabii: bool,
 }
 
 impl GameRules {
+    /// The rules a game is actually played with. For ordinary rules that's
+    /// just `self` untouched; with [`GameRules::hanabii`] on, every other
+    /// option is overridden by the mode's fixed preset — which is what
+    /// "picking hanabii locks the other options" means in the engine:
+    /// - `extra_colors: 1` (Orange and Purple in, White out — see that
+    ///   field's doc comment), giving red/orange/yellow/green/blue/purple,
+    /// - `six_cards: true` (3/2/2/2/2/1 of ranks 1-6 in every color),
+    /// - no multicolor or black suit, and no "short" (one-of-each) suits.
+    ///
+    /// Idempotent, and the server applies it whenever the lobby rules
+    /// change (so every client sees the locked-in preset) as well as when
+    /// a game is created, so a client can't sneak extra options in next to
+    /// the mode by sending a hand-built `SetRules`. [`GameRules::active_colors`],
+    /// [`GameRules::is_short`] and [`GameRules::max_rank`] all read
+    /// through it too, so they answer for the mode even on un-normalized
+    /// rules.
+    pub fn normalized(&self) -> GameRules {
+        if self.hanabii {
+            GameRules {
+                hanabii: true,
+                extra_colors: 1,
+                six_cards: true,
+                ..GameRules::default()
+            }
+        } else {
+            *self
+        }
+    }
+
     /// The colors actually in play for a game using these rules, in stable
     /// display order used throughout the app: white, red, orange, yellow,
     /// green, blue, purple, multicolor, black — except White drops out
@@ -83,7 +130,8 @@ impl GameRules {
     /// set both the deck and the fireworks/discard-pile display are built
     /// from.
     pub fn active_colors(&self) -> Vec<Color> {
-        let extra_level = self.extra_colors.min(2);
+        let rules = self.normalized();
+        let extra_level = rules.extra_colors.min(2);
         let mut colors = Vec::with_capacity(7 + 2);
         // White sits out only at exactly 1 — both Orange and Purple come
         // in together there to make room for it, and it's back the moment
@@ -101,10 +149,10 @@ impl GameRules {
         if extra_level >= 1 {
             colors.push(Color::Purple);
         }
-        if self.multicolor {
+        if rules.multicolor {
             colors.push(Color::Multicolor);
         }
-        if self.black {
+        if rules.black {
             colors.push(Color::Black);
         }
         colors
@@ -116,21 +164,22 @@ impl GameRules {
     /// check whether the suit is active — it's `active_colors` that decides
     /// whether a suit (and so its distribution) matters at all.
     pub fn is_short(&self, color: Color) -> bool {
+        let rules = self.normalized();
         match color {
-            Color::Multicolor => self.multicolor_short,
-            Color::Black => self.black_short,
-            Color::Orange | Color::Purple => self.extra_colors_short,
+            Color::Multicolor => rules.multicolor_short,
+            Color::Black => rules.black_short,
+            Color::Orange | Color::Purple => rules.extra_colors_short,
             _ => false,
         }
     }
 
     /// The highest rank any active suit's firework can reach: 6 if the
-    /// "6th card" option is on, 5 otherwise. Applies uniformly to every
-    /// suit in play — including Black, whose firework just runs in the
-    /// other direction (see `is_reverse_suit` in `state.rs`), not to a
-    /// different ceiling.
+    /// "6th card" option is on (which the hanabii mode always is), 5
+    /// otherwise. Applies uniformly to every suit in play — including
+    /// Black, whose firework just runs in the other direction (see
+    /// `is_reverse_suit` in `state.rs`), not to a different ceiling.
     pub fn max_rank(&self) -> u8 {
-        if self.six_cards { 6 } else { 5 }
+        if self.normalized().six_cards { 6 } else { 5 }
     }
 
     /// The score a perfect game would reach: every active suit's firework
@@ -139,6 +188,53 @@ impl GameRules {
     /// future suit-specific ceiling wouldn't have to touch every caller.
     pub fn max_score(&self) -> u8 {
         self.active_colors().iter().map(|_| self.max_rank()).sum()
+    }
+
+    /// The colors a player is allowed to name in a color clue. Ordinarily
+    /// that's every active color except Multicolor (wild when *receiving*
+    /// a clue, but never the color named in one) and Black (no color at
+    /// all). In hanabii mode it's just the three primaries — red, yellow
+    /// and blue — regardless of which colors are in the deck.
+    ///
+    /// This is the list a UI should offer; the engine enforces it in
+    /// `GameState::apply_clue` with its own dedicated errors.
+    pub fn cluable_colors(&self) -> Vec<Color> {
+        if self.hanabii {
+            Color::PRIMARIES.to_vec()
+        } else {
+            self.active_colors()
+                .into_iter()
+                .filter(|&color| color != Color::Multicolor && color != Color::Black)
+                .collect()
+        }
+    }
+
+    /// Whether a color clue naming `clue` touches a card of color
+    /// `card_color` — the single definition of color-clue matching, shared
+    /// by the engine and by the frontend's hover preview so the two can't
+    /// disagree.
+    ///
+    /// Ordinarily a card is touched by its own color, and by *any* color
+    /// clue if it's Multicolor (Black, having no color, is never touched).
+    /// In hanabii mode a card is touched when the named primary is one of
+    /// its ingredients ([`Color::primary_components`]): red touches red,
+    /// orange and purple; yellow touches yellow, orange and green; blue
+    /// touches blue, green and purple.
+    pub fn color_clue_touches(&self, clue: Color, card_color: Color) -> bool {
+        if self.hanabii {
+            card_color.primary_components().contains(&clue)
+        } else {
+            card_color == clue || card_color == Color::Multicolor
+        }
+    }
+
+    /// Whether `clue` (a color or a number) touches `card` under these
+    /// rules. Number clues are the same in every mode.
+    pub fn clue_touches(&self, clue: Clue, card: Card) -> bool {
+        match clue {
+            Clue::Color(color) => self.color_clue_touches(color, card.color),
+            Clue::Number(number) => card.number == number,
+        }
     }
 }
 
@@ -158,6 +254,7 @@ mod tests {
                 black_short: false,
                 extra_colors_short: false,
                 six_cards: false,
+                hanabii: false,
             }
         );
     }
@@ -318,5 +415,174 @@ mod tests {
         // at all.
         assert!(rules.is_short(Color::Multicolor));
         assert!(!rules.active_colors().contains(&Color::Multicolor));
+    }
+
+    // --- hanabii mode -----------------------------------------------------
+
+    fn hanabii() -> GameRules {
+        GameRules { hanabii: true, ..Default::default() }
+    }
+
+    #[test]
+    fn hanabii_normalizes_to_a_fixed_six_color_six_card_preset() {
+        assert_eq!(
+            hanabii().normalized(),
+            GameRules {
+                hanabii: true,
+                extra_colors: 1,
+                six_cards: true,
+                ..Default::default()
+            }
+        );
+    }
+
+    #[test]
+    fn hanabii_overrides_every_other_option() {
+        // Every other toggle switched on, and the mode still comes out as
+        // the exact same preset — nothing leaks through next to it.
+        let everything = GameRules {
+            multicolor: true,
+            black: true,
+            extra_colors: 2,
+            multicolor_short: true,
+            black_short: true,
+            extra_colors_short: true,
+            six_cards: false,
+            hanabii: true,
+        };
+        assert_eq!(everything.normalized(), hanabii().normalized());
+    }
+
+    #[test]
+    fn normalization_is_idempotent() {
+        let once = hanabii().normalized();
+        assert_eq!(once.normalized(), once);
+    }
+
+    #[test]
+    fn normalized_leaves_ordinary_rules_untouched() {
+        let rules = GameRules {
+            multicolor: true,
+            black_short: true,
+            extra_colors: 2,
+            six_cards: true,
+            ..Default::default()
+        };
+        assert_eq!(rules.normalized(), rules);
+        assert_eq!(GameRules::default().normalized(), GameRules::default());
+    }
+
+    #[test]
+    fn hanabii_plays_with_red_orange_yellow_green_blue_purple_in_that_order() {
+        let expected = vec![
+            Color::Red,
+            Color::Orange,
+            Color::Yellow,
+            Color::Green,
+            Color::Blue,
+            Color::Purple,
+        ];
+        // Same answer whether or not the caller normalized first.
+        assert_eq!(hanabii().active_colors(), expected);
+        assert_eq!(hanabii().normalized().active_colors(), expected);
+        // ...and no White, Multicolor or Black even if asked for.
+        let greedy = GameRules { multicolor: true, black: true, hanabii: true, ..Default::default() };
+        assert_eq!(greedy.active_colors(), expected);
+    }
+
+    #[test]
+    fn hanabii_has_six_ranks_no_short_suits_and_a_max_score_of_36() {
+        let rules = GameRules { multicolor_short: true, extra_colors_short: true, hanabii: true, ..Default::default() };
+        assert_eq!(rules.max_rank(), 6);
+        assert_eq!(rules.max_score(), 36);
+        for color in rules.active_colors() {
+            assert!(!rules.is_short(color), "{color:?} shouldn't be short in hanabii mode");
+        }
+    }
+
+    #[test]
+    fn hanabii_only_offers_the_primary_colors_to_clue() {
+        assert_eq!(hanabii().cluable_colors(), vec![Color::Red, Color::Yellow, Color::Blue]);
+        assert_eq!(hanabii().normalized().cluable_colors(), vec![Color::Red, Color::Yellow, Color::Blue]);
+    }
+
+    #[test]
+    fn ordinary_games_offer_every_active_color_but_multicolor_and_black() {
+        assert_eq!(GameRules::default().cluable_colors(), Color::ALL.to_vec());
+        let rules = GameRules { multicolor: true, black: true, extra_colors: 2, ..Default::default() };
+        assert_eq!(
+            rules.cluable_colors(),
+            vec![
+                Color::White,
+                Color::Red,
+                Color::Orange,
+                Color::Yellow,
+                Color::Green,
+                Color::Blue,
+                Color::Purple,
+            ]
+        );
+    }
+
+    #[test]
+    fn hanabii_color_clues_touch_every_color_mixed_with_the_named_primary() {
+        let rules = hanabii();
+        let touched_by = |primary: Color| -> Vec<Color> {
+            rules
+                .active_colors()
+                .into_iter()
+                .filter(|&c| rules.color_clue_touches(primary, c))
+                .collect()
+        };
+        // The example straight from the mode's definition: a red clue hits
+        // red, and also purple (blue + red) and orange (red + yellow).
+        assert_eq!(touched_by(Color::Red), vec![Color::Red, Color::Orange, Color::Purple]);
+        assert_eq!(touched_by(Color::Yellow), vec![Color::Orange, Color::Yellow, Color::Green]);
+        assert_eq!(touched_by(Color::Blue), vec![Color::Green, Color::Blue, Color::Purple]);
+    }
+
+    #[test]
+    fn every_hanabii_color_is_touched_by_exactly_its_own_ingredients() {
+        // The same table read the other way round: how many of the three
+        // primary clues would touch each color.
+        let rules = hanabii();
+        for (color, expected) in [
+            (Color::Red, 1),
+            (Color::Yellow, 1),
+            (Color::Blue, 1),
+            (Color::Orange, 2),
+            (Color::Green, 2),
+            (Color::Purple, 2),
+        ] {
+            let touching = Color::PRIMARIES
+                .iter()
+                .filter(|&&p| rules.color_clue_touches(p, color))
+                .count();
+            assert_eq!(touching, expected, "{color:?}");
+        }
+    }
+
+    #[test]
+    fn ordinary_color_clues_touch_their_own_color_and_multicolor_only() {
+        let rules = GameRules { multicolor: true, black: true, ..Default::default() };
+        assert!(rules.color_clue_touches(Color::Red, Color::Red));
+        assert!(rules.color_clue_touches(Color::Red, Color::Multicolor));
+        assert!(!rules.color_clue_touches(Color::Red, Color::Blue));
+        assert!(!rules.color_clue_touches(Color::Red, Color::Black));
+        // Notably, in an ordinary game red doesn't touch orange or purple
+        // — that's what's special about hanabii mode.
+        assert!(!rules.color_clue_touches(Color::Red, Color::Orange));
+        assert!(!rules.color_clue_touches(Color::Red, Color::Purple));
+    }
+
+    #[test]
+    fn number_clues_touch_by_rank_in_every_mode() {
+        let card = Card { color: Color::Orange, number: 3 };
+        for rules in [GameRules::default(), hanabii()] {
+            assert!(rules.clue_touches(Clue::Number(3), card));
+            assert!(!rules.clue_touches(Clue::Number(4), card));
+        }
+        assert!(hanabii().clue_touches(Clue::Color(Color::Red), card));
+        assert!(!GameRules::default().clue_touches(Clue::Color(Color::Red), card));
     }
 }

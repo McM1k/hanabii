@@ -141,6 +141,12 @@ fn handle_client_message(room: &Arc<Mutex<Room>>, player_id: PlayerId, msg: Clie
             // just ignored rather than erroring, same tolerant handling as
             // a repeated Join above.
             if room_guard.game.is_none() {
+                // The hanabii mode is a fixed preset that replaces every
+                // other option. Resolve it here, so the room stores — and
+                // every client is shown — the concrete rules that will
+                // actually be played, and a hand-built `SetRules` can't
+                // sneak extra options in next to it.
+                let rules = rules.normalized();
                 room_guard.rules = rules;
                 room_guard.broadcast(&ServerMessage::RulesUpdated { rules });
             }
@@ -171,5 +177,161 @@ fn handle_client_message(room: &Arc<Mutex<Room>>, player_id: PlayerId, msg: Clie
                 );
             }
         },
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use game_core::{Color, GameRules};
+
+    type Inbox = mpsc::UnboundedReceiver<ServerMessage>;
+
+    /// A room with `n` seated players, each with an inbox to read what the
+    /// server sent them.
+    fn room_with_players(n: usize) -> (Arc<Mutex<Room>>, Vec<PlayerId>, Vec<Inbox>) {
+        let room = Arc::new(Mutex::new(Room::new()));
+        let mut ids = Vec::new();
+        let mut inboxes = Vec::new();
+        for i in 0..n {
+            let (tx, rx) = mpsc::unbounded_channel();
+            let id = room.lock().unwrap().add_player(format!("P{i}"), tx).unwrap();
+            ids.push(id);
+            inboxes.push(rx);
+        }
+        (room, ids, inboxes)
+    }
+
+    fn rules_updates(inbox: &mut Inbox) -> Vec<GameRules> {
+        let mut updates = Vec::new();
+        while let Ok(msg) = inbox.try_recv() {
+            if let ServerMessage::RulesUpdated { rules } = msg {
+                updates.push(rules);
+            }
+        }
+        updates
+    }
+
+    #[test]
+    fn picking_hanabii_locks_the_other_options_and_tells_everyone() {
+        let (room, ids, mut inboxes) = room_with_players(2);
+
+        // A client that (buggy, or hand-built) sends every other option
+        // alongside the mode.
+        let greedy = GameRules {
+            multicolor: true,
+            black: true,
+            extra_colors: 2,
+            multicolor_short: true,
+            black_short: true,
+            extra_colors_short: true,
+            six_cards: false,
+            hanabii: true,
+        };
+        handle_client_message(&room, ids[0], ClientMessage::SetRules { rules: greedy });
+
+        let preset = GameRules { hanabii: true, ..Default::default() }.normalized();
+        assert_eq!(room.lock().unwrap().rules, preset);
+        assert!(preset.hanabii && preset.six_cards && preset.extra_colors == 1);
+        assert!(!preset.multicolor && !preset.black);
+
+        // Everyone — the sender included — is shown the locked-in preset,
+        // not what was asked for.
+        for inbox in &mut inboxes {
+            assert_eq!(rules_updates(inbox), vec![preset]);
+        }
+    }
+
+    #[test]
+    fn ordinary_rules_pass_through_untouched() {
+        let (room, ids, mut inboxes) = room_with_players(2);
+        let rules = GameRules { multicolor: true, extra_colors: 2, black_short: true, ..Default::default() };
+        handle_client_message(&room, ids[1], ClientMessage::SetRules { rules });
+
+        assert_eq!(room.lock().unwrap().rules, rules);
+        assert_eq!(rules_updates(&mut inboxes[0]), vec![rules]);
+    }
+
+    #[test]
+    fn unpicking_hanabii_frees_the_options_again() {
+        let (room, ids, _inboxes) = room_with_players(2);
+        handle_client_message(
+            &room,
+            ids[0],
+            ClientMessage::SetRules { rules: GameRules { hanabii: true, ..Default::default() } },
+        );
+        // Back to a plain game, then a couple of ordinary options on top.
+        let rules = GameRules { black: true, six_cards: true, ..Default::default() };
+        handle_client_message(&room, ids[0], ClientMessage::SetRules { rules });
+        assert_eq!(room.lock().unwrap().rules, rules);
+    }
+
+    #[test]
+    fn rules_cannot_change_once_the_game_has_started() {
+        let (room, ids, _inboxes) = room_with_players(2);
+        handle_client_message(&room, ids[0], ClientMessage::StartGame);
+        assert!(room.lock().unwrap().game.is_some());
+
+        handle_client_message(
+            &room,
+            ids[0],
+            ClientMessage::SetRules { rules: GameRules { hanabii: true, ..Default::default() } },
+        );
+        assert_eq!(room.lock().unwrap().rules, GameRules::default());
+    }
+
+    #[test]
+    fn a_hanabii_lobby_starts_a_hanabii_game_and_sends_everyone_a_view_of_it() {
+        let (room, ids, mut inboxes) = room_with_players(2);
+        handle_client_message(
+            &room,
+            ids[0],
+            ClientMessage::SetRules { rules: GameRules { hanabii: true, ..Default::default() } },
+        );
+        handle_client_message(&room, ids[1], ClientMessage::StartGame);
+
+        {
+            let guard = room.lock().unwrap();
+            let game = guard.game.as_ref().expect("the game should have started");
+            assert!(game.rules.hanabii);
+            assert_eq!(game.rules.max_score(), 36);
+            assert_eq!(game.fireworks.len(), 6);
+            assert!(!game.fireworks.contains_key(&Color::White));
+        }
+
+        // The state push is what actually reaches the frontend, which
+        // reads it back with serde_json — so check it survives that trip,
+        // new fields and all.
+        for inbox in &mut inboxes {
+            let mut saw_state = false;
+            while let Ok(msg) = inbox.try_recv() {
+                if let ServerMessage::StateUpdate(view) = msg {
+                    let json = serde_json::to_string(&ServerMessage::StateUpdate(view.clone())).unwrap();
+                    let Ok(ServerMessage::StateUpdate(back)) = serde_json::from_str::<ServerMessage>(&json)
+                    else {
+                        panic!("state update didn't round-trip: {json}");
+                    };
+                    assert_eq!(back.rules, view.rules);
+                    assert!(back.rules.hanabii);
+                    assert_eq!(back.fireworks, view.fireworks);
+                    saw_state = true;
+                }
+            }
+            assert!(saw_state, "every player should get a state update when the game starts");
+        }
+    }
+
+    #[test]
+    fn rules_payloads_from_before_hanabii_existed_still_parse() {
+        // `#[serde(default)]` on every field: a client that has never heard
+        // of the mode just doesn't send it, and gets a normal game.
+        let old: GameRules = serde_json::from_str(r#"{"multicolor":true,"extra_colors":1}"#).unwrap();
+        assert!(old.multicolor && !old.hanabii);
+
+        let bare: GameRules = serde_json::from_str("{}").unwrap();
+        assert_eq!(bare, GameRules::default());
+
+        let json = serde_json::to_string(&GameRules { hanabii: true, ..Default::default() }).unwrap();
+        assert!(serde_json::from_str::<GameRules>(&json).unwrap().hanabii);
     }
 }

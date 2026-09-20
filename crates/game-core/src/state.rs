@@ -111,6 +111,10 @@ pub enum ActionError {
     /// The black suit has no color at all for clue purposes — it can't be
     /// named in a clue any more than it can be touched by one.
     CannotClueBlack,
+    /// Hanabii mode only: a color clue must name a primary color (red,
+    /// yellow or blue). The other colors are mixed from those, so they
+    /// can't be named directly — they're reached through their ingredients.
+    CannotClueSecondaryColor,
     ClueMatchesNothing,
     CardNotInHand,
     CannotDiscardAtMaxClues,
@@ -168,6 +172,10 @@ impl GameState {
             (2..=5).contains(&player_count),
             "Hanabi supports 2-5 players"
         );
+        // The hanabii mode is a fixed preset that replaces every other
+        // option — resolve it once here so the stored rules (which are also
+        // what every client is sent) are always the concrete ones played.
+        let rules = rules.normalized();
         let players: Vec<PlayerId> = (0..player_count).map(PlayerId).collect();
         let hand_size = if player_count <= 3 { 5 } else { 4 };
 
@@ -266,43 +274,50 @@ impl GameState {
         }
         if matches!(clue, Clue::Color(Color::Black)) {
             // Black has no color at all — nothing to name it with, and (see
-            // the is_match arm below) no color clue would touch it anyway.
+            // `GameRules::color_clue_touches`) no color clue would touch it
+            // anyway.
             return Err(ActionError::CannotClueBlack);
+        }
+        if self.rules.hanabii && matches!(clue, Clue::Color(c) if !c.is_primary()) {
+            // Hanabii mode: only red, yellow and blue can be named. Orange,
+            // green and purple are mixed from them, so they're only ever
+            // touched *by* a primary clue, never named by one.
+            return Err(ActionError::CannotClueSecondaryColor);
         }
         if self.clue_tokens == 0 {
             return Err(ActionError::NoClueTokens);
         }
 
+        let rules = self.rules;
         let hand = self
             .hands
             .get_mut(&target)
             .expect("every seated player has a hand");
 
-        let mut touched = Vec::new();
-        let mut any_match = false;
-
-        for hc in hand.iter_mut() {
-            let is_match = match clue {
-                // A multicolor card counts as every color for clue-matching
-                // purposes, so a "Red" clue touches actual red cards *and*
-                // any multicolor cards in the hand. Black cards never match
-                // a color clue at all — that falls out of this check for
-                // free, since Black can only ever equal itself, and `c` is
-                // never Black or Multicolor (both rejected above).
-                Clue::Color(c) => hc.card.color == c || hc.card.color == Color::Multicolor,
-                Clue::Number(n) => hc.card.number == n,
-            };
-            if is_match {
-                any_match = true;
-                touched.push(hc.id);
-                hc.knowledge.apply_positive(clue);
-            } else {
-                hc.knowledge.apply_negative(clue);
-            }
+        // Which cards a clue touches is `GameRules::clue_touches`'s call —
+        // own color plus wild multicolor cards in an ordinary game, every
+        // color mixed with the named primary in hanabii mode, and Black
+        // never — so the engine and the frontend's hover preview share one
+        // definition.
+        //
+        // Worked out for the whole hand *before* anything is recorded: a
+        // clue that touches nothing is rejected, and a rejected clue must
+        // leave no trace (in particular, it mustn't hand the target free
+        // negative information about their cards).
+        let matches: Vec<bool> = hand
+            .iter()
+            .map(|hc| rules.clue_touches(clue, hc.card))
+            .collect();
+        if !matches.iter().any(|&is_match| is_match) {
+            return Err(ActionError::ClueMatchesNothing);
         }
 
-        if !any_match {
-            return Err(ActionError::ClueMatchesNothing);
+        let mut touched = Vec::new();
+        for (hc, &is_match) in hand.iter_mut().zip(&matches) {
+            if is_match {
+                touched.push(hc.id);
+            }
+            hc.knowledge.apply_clue_result(clue, is_match, &rules);
         }
 
         self.clue_tokens -= 1;
@@ -1211,5 +1226,469 @@ mod tests {
         let card_id = g.hands[&player][0].id;
         let result = g.apply_action(player, Action::Discard { card_id });
         assert_eq!(result.unwrap_err(), ActionError::GameOver);
+    }
+
+    // --- rejected clues ---------------------------------------------------
+
+    #[test]
+    fn a_clue_that_matches_nothing_is_rejected_without_leaving_a_trace() {
+        // A rejected clue must not change anything — least of all what the
+        // target's cards "know". Otherwise anyone could probe for free
+        // (no token, no turn spent) and hand the target negative info that
+        // a legal clue could never have given them.
+        let mut g = two_player_game();
+        for hc in g.hands.get_mut(&PlayerId(1)).unwrap().iter_mut() {
+            hc.card = Card { color: Color::White, number: 2 };
+        }
+        let before: Vec<_> = g.hands[&PlayerId(1)].iter().map(|hc| hc.knowledge.clone()).collect();
+
+        let result = g.apply_action(
+            PlayerId(0),
+            Action::Clue { target: PlayerId(1), clue: Clue::Color(Color::Red) },
+        );
+        assert_eq!(result.unwrap_err(), ActionError::ClueMatchesNothing);
+
+        let after: Vec<_> = g.hands[&PlayerId(1)].iter().map(|hc| hc.knowledge.clone()).collect();
+        assert_eq!(before, after, "a rejected clue changed the target's knowledge");
+        assert_eq!(g.clue_tokens, MAX_CLUE_TOKENS);
+        assert_eq!(g.current_player(), PlayerId(0));
+    }
+
+    // --- hanabii mode -----------------------------------------------------
+
+    fn hanabii_rules() -> GameRules {
+        GameRules { hanabii: true, ..Default::default() }
+    }
+
+    fn hanabii_game() -> GameState {
+        GameState::new(2, 42, hanabii_rules())
+    }
+
+    /// Replaces the first cards of a player's hand with the given colors
+    /// (all rank 3 unless the ranks are given), returning their ids.
+    fn set_hand(g: &mut GameState, player: PlayerId, cards: &[(Color, u8)]) -> Vec<CardId> {
+        let hand = g.hands.get_mut(&player).unwrap();
+        cards
+            .iter()
+            .enumerate()
+            .map(|(i, &(color, number))| {
+                hand[i].card = Card { color, number };
+                hand[i].id
+            })
+            .collect()
+    }
+
+    fn touched_by(g: &mut GameState, from: PlayerId, target: PlayerId, clue: Clue) -> Vec<CardId> {
+        let events = g.apply_action(from, Action::Clue { target, clue }).unwrap();
+        match &events[0] {
+            Event::ClueGiven { touched, .. } => touched.clone(),
+            other => panic!("expected a ClueGiven event, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn hanabii_deals_from_a_seventy_two_card_deck_of_six_colors() {
+        let g = GameState::new(3, 7, hanabii_rules());
+        let dealt: usize = g.hands.values().map(|h| h.len()).sum();
+        assert_eq!(dealt + g.draw_pile.len(), 72);
+
+        let mut colors: Vec<Color> = g.fireworks.keys().copied().collect();
+        colors.sort_by_key(|c| g.rules.active_colors().iter().position(|a| a == c));
+        assert_eq!(
+            colors,
+            vec![Color::Red, Color::Orange, Color::Yellow, Color::Green, Color::Blue, Color::Purple]
+        );
+        assert!(g.fireworks.values().all(|&top| top == 0));
+        assert_eq!(g.rules.max_score(), 36);
+        assert_eq!(g.rules.max_rank(), 6);
+    }
+
+    #[test]
+    fn hanabii_locks_the_other_options_when_the_game_starts() {
+        // Every other toggle on — the game still starts as plain hanabii,
+        // and the rules it stores (and sends to every client) say so.
+        let greedy = GameRules {
+            multicolor: true,
+            black: true,
+            extra_colors: 2,
+            multicolor_short: true,
+            black_short: true,
+            extra_colors_short: true,
+            hanabii: true,
+            ..Default::default()
+        };
+        let g = GameState::new(2, 42, greedy);
+        assert_eq!(g.rules, hanabii_rules().normalized());
+        let dealt: usize = g.hands.values().map(|h| h.len()).sum();
+        assert_eq!(dealt + g.draw_pile.len(), 72);
+        assert_eq!(g.fireworks.len(), 6);
+    }
+
+    #[test]
+    fn a_red_clue_touches_red_orange_and_purple_cards() {
+        let mut g = hanabii_game();
+        let ids = set_hand(
+            &mut g,
+            PlayerId(1),
+            &[
+                (Color::Red, 1),
+                (Color::Orange, 2),
+                (Color::Purple, 3),
+                (Color::Yellow, 4),
+                (Color::Green, 5),
+            ],
+        );
+
+        let touched = touched_by(&mut g, PlayerId(0), PlayerId(1), Clue::Color(Color::Red));
+
+        // Red, orange (red + yellow) and purple (blue + red) — but not
+        // plain yellow, and not green (yellow + blue: no red in it).
+        assert_eq!(touched, vec![ids[0], ids[1], ids[2]]);
+        assert_eq!(g.clue_tokens, MAX_CLUE_TOKENS - 1);
+    }
+
+    #[test]
+    fn each_primary_clue_touches_exactly_the_colors_mixed_with_it() {
+        let all = [
+            Color::Red,
+            Color::Orange,
+            Color::Yellow,
+            Color::Green,
+            Color::Blue,
+            Color::Purple,
+        ];
+        for (primary, expected) in [
+            (Color::Red, vec![Color::Red, Color::Orange, Color::Purple]),
+            (Color::Yellow, vec![Color::Orange, Color::Yellow, Color::Green]),
+            (Color::Blue, vec![Color::Green, Color::Blue, Color::Purple]),
+        ] {
+            let mut g = hanabii_game();
+            // Two players are dealt five cards each, so tack a sixth onto
+            // player 1's hand to fit one card of every color.
+            g.hands.get_mut(&PlayerId(1)).unwrap().push(HandCard {
+                id: CardId(1000),
+                card: Card { color: Color::Red, number: 1 },
+                knowledge: CardKnowledge::default(),
+            });
+            let cards: Vec<(Color, u8)> = all.iter().map(|&color| (color, 1)).collect();
+            let ids = set_hand(&mut g, PlayerId(1), &cards);
+
+            let touched = touched_by(&mut g, PlayerId(0), PlayerId(1), Clue::Color(primary));
+            let touched_colors: Vec<Color> = all
+                .iter()
+                .zip(&ids)
+                .filter(|(_, id)| touched.contains(id))
+                .map(|(&color, _)| color)
+                .collect();
+            assert_eq!(touched_colors, expected, "{primary:?} clue");
+        }
+    }
+
+    #[test]
+    fn only_primary_colors_can_be_named_in_a_hanabii_clue() {
+        for color in [Color::Orange, Color::Green, Color::Purple, Color::White] {
+            let mut g = hanabii_game();
+            // A hand full of that very color, so the clue would certainly
+            // touch something if it were allowed.
+            set_hand(&mut g, PlayerId(1), &[(color, 1), (color, 2), (color, 3), (color, 4), (color, 5)]);
+
+            let result = g.apply_action(
+                PlayerId(0),
+                Action::Clue { target: PlayerId(1), clue: Clue::Color(color) },
+            );
+            assert_eq!(result.unwrap_err(), ActionError::CannotClueSecondaryColor, "{color:?}");
+            // Nothing happened: no token spent, still player 0's turn, and
+            // nothing was taught to the target.
+            assert_eq!(g.clue_tokens, MAX_CLUE_TOKENS);
+            assert_eq!(g.current_player(), PlayerId(0));
+            assert!(g.hands[&PlayerId(1)]
+                .iter()
+                .all(|hc| hc.knowledge == CardKnowledge::default()));
+        }
+    }
+
+    #[test]
+    fn the_engine_accepts_exactly_the_colors_the_rules_say_are_cluable() {
+        let every_color = [
+            Color::White,
+            Color::Red,
+            Color::Yellow,
+            Color::Green,
+            Color::Blue,
+            Color::Multicolor,
+            Color::Black,
+            Color::Orange,
+            Color::Purple,
+        ];
+        let rules = hanabii_rules();
+        let cluable = rules.cluable_colors();
+        for color in every_color {
+            let mut g = hanabii_game();
+            // One card of every color in play, so a legal color clue can
+            // never be turned away for touching nothing.
+            set_hand(
+                &mut g,
+                PlayerId(1),
+                &[
+                    (Color::Red, 1),
+                    (Color::Orange, 1),
+                    (Color::Yellow, 1),
+                    (Color::Green, 1),
+                    (Color::Blue, 1),
+                ],
+            );
+            let result = g.apply_action(
+                PlayerId(0),
+                Action::Clue { target: PlayerId(1), clue: Clue::Color(color) },
+            );
+            assert_eq!(result.is_ok(), cluable.contains(&color), "{color:?}: {result:?}");
+        }
+    }
+
+    #[test]
+    fn a_hanabii_clue_must_still_touch_at_least_one_card() {
+        let mut g = hanabii_game();
+        // Only green cards (yellow + blue): red touches none of them...
+        set_hand(&mut g, PlayerId(1), &[(Color::Green, 1); 5]);
+        let result = g.apply_action(
+            PlayerId(0),
+            Action::Clue { target: PlayerId(1), clue: Clue::Color(Color::Red) },
+        );
+        assert_eq!(result.unwrap_err(), ActionError::ClueMatchesNothing);
+
+        // ...but yellow and blue both touch all of them.
+        let all = touched_by(&mut g, PlayerId(0), PlayerId(1), Clue::Color(Color::Yellow));
+        assert_eq!(all.len(), 5);
+    }
+
+    #[test]
+    fn number_clues_work_as_usual_in_hanabii_mode() {
+        let mut g = hanabii_game();
+        let ids = set_hand(
+            &mut g,
+            PlayerId(1),
+            &[
+                (Color::Red, 3),
+                (Color::Orange, 3),
+                (Color::Green, 4),
+                (Color::Blue, 3),
+                (Color::Purple, 6),
+            ],
+        );
+        let touched = touched_by(&mut g, PlayerId(0), PlayerId(1), Clue::Number(3));
+        assert_eq!(touched, vec![ids[0], ids[1], ids[3]]);
+        // ...and it says nothing at all about color.
+        let k = &g.hands[&PlayerId(1)][0].knowledge;
+        assert_eq!(k.known_number, Some(3));
+        assert_eq!(k.hanabii_possible_colors(&g.rules).len(), 6);
+    }
+
+    #[test]
+    fn hanabii_clues_teach_the_target_about_primary_colors_not_the_card_color() {
+        let mut g = hanabii_game();
+        // The green card (index 3) is the one player 1 discards below.
+        let ids = set_hand(
+            &mut g,
+            PlayerId(1),
+            &[
+                (Color::Orange, 1),
+                (Color::Red, 2),
+                (Color::Blue, 3),
+                (Color::Green, 4),
+                (Color::Purple, 5),
+            ],
+        );
+        touched_by(&mut g, PlayerId(0), PlayerId(1), Clue::Color(Color::Red));
+
+        let knowledge = |g: &GameState, id: CardId| {
+            g.hands[&PlayerId(1)].iter().find(|hc| hc.id == id).unwrap().knowledge.clone()
+        };
+        let rules = g.rules;
+
+        // Orange and red were hit: they could each be red, orange or
+        // purple — and neither is claimed to *be* red.
+        for id in [ids[0], ids[1], ids[4]] {
+            let k = knowledge(&g, id);
+            assert_eq!(k.known_color, None);
+            assert_eq!(
+                k.hanabii_possible_colors(&rules),
+                vec![Color::Red, Color::Orange, Color::Purple]
+            );
+        }
+        // Blue and green missed: neither can be red, orange or purple.
+        for id in [ids[2], ids[3]] {
+            let k = knowledge(&g, id);
+            assert_eq!(
+                k.ruled_out_colors(&rules),
+                vec![Color::Red, Color::Orange, Color::Purple]
+            );
+        }
+
+        // Player 1 throws a card away to hand the turn back (discarding
+        // refunds a token, so this also keeps the clue budget healthy)...
+        g.apply_action(PlayerId(1), Action::Discard { card_id: ids[3] }).unwrap();
+        // ...and whatever was drawn to replace it is pinned to a blue card,
+        // so it isn't a wildcard in the yellow clue that follows.
+        g.hands.get_mut(&PlayerId(1)).unwrap().last_mut().unwrap().card =
+            Card { color: Color::Blue, number: 1 };
+
+        // Now yellow: it touches the orange card only.
+        let touched = touched_by(&mut g, PlayerId(0), PlayerId(1), Clue::Color(Color::Yellow));
+        assert_eq!(touched, vec![ids[0]]);
+
+        // Red-and-yellow is orange, full stop.
+        assert_eq!(knowledge(&g, ids[0]).hanabii_certain_color(&rules), Some(Color::Orange));
+        // Hit by red, missed by yellow: red or purple.
+        assert_eq!(
+            knowledge(&g, ids[1]).hanabii_possible_colors(&rules),
+            vec![Color::Red, Color::Purple]
+        );
+        // Missed by both red and yellow: it can only be blue.
+        assert_eq!(knowledge(&g, ids[2]).hanabii_certain_color(&rules), Some(Color::Blue));
+        // The ordinary bookkeeping stays untouched all the way through.
+        for hc in &g.hands[&PlayerId(1)] {
+            assert!(hc.knowledge.clued_colors.is_empty());
+            assert!(hc.knowledge.not_colors.is_empty());
+            assert_eq!(hc.knowledge.known_color, None);
+            assert!(!hc.knowledge.inferred_multicolor());
+        }
+    }
+
+    #[test]
+    fn hanabii_fireworks_are_built_one_to_six_in_all_six_colors() {
+        let mut g = hanabii_game();
+        set_hand(&mut g, PlayerId(0), &[(Color::Orange, 1)]);
+        let id = g.hands[&PlayerId(0)][0].id;
+        g.apply_action(PlayerId(0), Action::Play { card_id: id }).unwrap();
+        assert_eq!(g.fireworks[&Color::Orange], 1);
+        assert_eq!(g.fuse_tokens, MAX_FUSE_TOKENS);
+
+        // A 6 is a real, playable rank here: an orange firework at 5 takes
+        // it, completes, and refunds a clue token.
+        let mut g = hanabii_game();
+        g.fireworks.insert(Color::Orange, 5);
+        g.clue_tokens = MAX_CLUE_TOKENS - 1;
+        set_hand(&mut g, PlayerId(0), &[(Color::Orange, 6)]);
+        let id = g.hands[&PlayerId(0)][0].id;
+        g.apply_action(PlayerId(0), Action::Play { card_id: id }).unwrap();
+        assert_eq!(g.fireworks[&Color::Orange], 6);
+        assert_eq!(g.clue_tokens, MAX_CLUE_TOKENS);
+        assert_eq!(g.fuse_tokens, MAX_FUSE_TOKENS);
+    }
+
+    #[test]
+    fn a_perfect_hanabii_game_scores_36() {
+        let mut g = hanabii_game();
+        for color in g.rules.active_colors() {
+            g.fireworks.insert(color, 6);
+        }
+        g.fireworks.insert(Color::Purple, 5); // one play short of done
+
+        set_hand(&mut g, PlayerId(0), &[(Color::Purple, 6)]);
+        let id = g.hands[&PlayerId(0)][0].id;
+        g.apply_action(PlayerId(0), Action::Play { card_id: id }).unwrap();
+
+        assert_eq!(g.score(), 36);
+        assert_eq!(g.status, GameStatus::Finished(EndReason::PerfectScore));
+    }
+
+    #[test]
+    fn hanabii_knowledge_stays_sound_through_whole_random_games() {
+        // Plays many complete games with a deterministic pseudo-random
+        // player and, after every single move, checks the one thing that
+        // must never be wrong: what a card's knowledge claims is
+        // consistent with what the card really is. The true color is never
+        // ruled out; a "certain" color is the real one; and none of the
+        // ordinary color bookkeeping (which would misread composite hits
+        // as multicolor) is ever touched.
+        let rules = hanabii_rules().normalized();
+        let mut clues_given = 0;
+        let mut secondaries_pinned = 0;
+
+        for seed in 0..60u64 {
+            let mut rng = seed.wrapping_mul(0x9E37_79B9_7F4A_7C15) ^ 0xD1B5_4A32_D192_ED03;
+            let mut next = move || {
+                rng ^= rng << 13;
+                rng ^= rng >> 7;
+                rng ^= rng << 17;
+                rng
+            };
+            let players = 2 + (seed % 4) as u8;
+            let mut g = GameState::new(players, seed, hanabii_rules());
+
+            for _turn in 0..400 {
+                if g.status != GameStatus::InProgress {
+                    break;
+                }
+                let me = g.current_player();
+                let others: Vec<PlayerId> = g.players.iter().copied().filter(|&p| p != me).collect();
+                let my_cards: Vec<CardId> = g.hands[&me].iter().map(|hc| hc.id).collect();
+
+                // Mostly clues, some discards, the odd play: enough of
+                // each to reach the deep parts of the game without losing
+                // to fuses in the first few turns.
+                let mut accepted = false;
+                for _attempt in 0..40 {
+                    let roll = next() % 100;
+                    let action = if roll < 65 {
+                        let target = others[(next() as usize) % others.len()];
+                        let clue = if next() % 3 == 0 {
+                            Clue::Number(1 + (next() % 6) as u8)
+                        } else {
+                            // Deliberately draws from *every* color, so
+                            // the engine's refusal of the non-primaries is
+                            // exercised on live games too.
+                            let all = [
+                                Color::Red, Color::Orange, Color::Yellow,
+                                Color::Green, Color::Blue, Color::Purple,
+                            ];
+                            Clue::Color(all[(next() as usize) % all.len()])
+                        };
+                        Action::Clue { target, clue }
+                    } else if roll < 90 {
+                        Action::Discard { card_id: my_cards[(next() as usize) % my_cards.len()] }
+                    } else {
+                        Action::Play { card_id: my_cards[(next() as usize) % my_cards.len()] }
+                    };
+                    let is_clue = matches!(action, Action::Clue { .. });
+                    if g.apply_action(me, action).is_ok() {
+                        accepted = true;
+                        if is_clue {
+                            clues_given += 1;
+                        }
+                        break;
+                    }
+                }
+                if !accepted {
+                    // Always possible: playing a card never errors.
+                    g.apply_action(me, Action::Play { card_id: my_cards[0] }).unwrap();
+                }
+
+                for hand in g.hands.values() {
+                    for hc in hand {
+                        let k = &hc.knowledge;
+                        assert!(
+                            k.could_be_hanabii_color(hc.card.color),
+                            "seed {seed}: {:?} was ruled out for a {:?} card",
+                            k.hanabii_possible_colors(&rules),
+                            hc.card.color
+                        );
+                        if let Some(certain) = k.hanabii_certain_color(&rules) {
+                            assert_eq!(certain, hc.card.color, "seed {seed}");
+                            if !hc.card.color.is_primary() {
+                                secondaries_pinned += 1;
+                            }
+                        }
+                        assert_eq!(k.known_color, None, "seed {seed}");
+                        assert!(k.clued_colors.is_empty() && k.not_colors.is_empty(), "seed {seed}");
+                        assert!(!k.inferred_multicolor(), "seed {seed}");
+                    }
+                }
+            }
+        }
+        // Guards the test itself: it really did exercise clues, and really
+        // did pin down orange/green/purple cards along the way.
+        assert!(clues_given > 500, "only {clues_given} clues were given");
+        assert!(secondaries_pinned > 50, "only {secondaries_pinned} secondary cards were pinned");
     }
 }

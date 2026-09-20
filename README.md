@@ -5,8 +5,8 @@ Axum for the server, Leptos (WASM) for the frontend, WebSockets tying them toget
 
 ## Status
 
-- [x] `game-core` — the rules engine. Compiler-verified, 61/61 tests passing.
-- [x] `server` — Axum + WebSockets, room management. Compiler-verified, 6/6 tests
+- [x] `game-core` — the rules engine. Compiler-verified, 118/118 tests passing.
+- [x] `server` — Axum + WebSockets, room management. Compiler-verified, 12/12 tests
       passing, join flow tested manually.
 - [x] `frontend` — Leptos UI. Compiler-verified every round (zero errors, zero
       warnings) via a sandbox-only dependency-pinning workaround (see
@@ -164,8 +164,7 @@ hanabi/
 - **Variant rules are opt-in, chosen in the lobby before the game starts.** Any
   seated player can toggle them (`GameRules`, synced to everyone via `SetRules` /
   `RulesUpdated`); the server freezes whatever's selected into the `GameState` at
-  `StartGame` and it can't change mid-game. First (and so far only) rule:
-  **multicolor suit** — see below.
+  `StartGame` and it can't change mid-game. See the rule lists below.
 
 ## Standard rules implemented
 
@@ -188,13 +187,15 @@ Toggled independently in the lobby, any combination:
   "wild for every clue" — and its firework is built in *descending* order, 5
   down to 1, with a mirrored 1/2/2/2/3 card distribution (three 5s down to one
   1) to match.
-- **Extra colors** (`extra_colors`, 0-2): adds that many perfectly ordinary
-  suits on top of the base five — ascending 1-5, normal clue matching, no
-  special behavior. Picked in priority from colors that aren't white (so
-  another near-white suit never gets confused with the base white one) —
-  currently orange (added first) then purple (added second). One lobby
-  control (a count, not per-color toggles) rather than naming them
-  individually, since which two specific hues fill the slots isn't the point.
+- **Extra colors** (`extra_colors`, 0-2): a tri-state, not "N more suits on top of
+  the base five" — White itself moves. 0: the plain five (white/red/yellow/green/blue).
+  1: Orange *and* Purple both come in and White drops out to make room (6 suits:
+  red/orange/yellow/green/blue/purple). 2: White comes back too, all seven at
+  once. Orange and purple are perfectly ordinary suits — ascending, normal clue
+  matching. One lobby control (a count, not per-color toggles).
+- **Six-card suits** (`six_cards`): adds a 6th rank to every active suit — an
+  ascending suit's unique 5 becomes a pair and 6 becomes the unique top card
+  (3/2/2/2/2/1, 12 cards); black powder mirrors it (three 6s down to one 1).
 
 Multicolor and black each add 5 to the max score; each extra color does too.
 Each also adds 10 cards to the deck unless its "short" option below is on (all
@@ -205,6 +206,35 @@ Each also has its own independent **"short deck"** option (`multicolor_short`,
 many extra colors are added): one copy of every rank (5 cards) instead of the
 usual distribution, making those cards irreplaceable. Only matters if the
 corresponding suit(s) are actually active.
+
+## Hanabii mode
+
+A game mode of its own (`hanabii`, spelled with two i's), picked in the lobby
+under "Game mode". It's a fixed preset that **replaces** every option above rather
+than combining with them: while it's on, the other lobby controls are locked (and
+show what the mode plays with), and the server forces the same thing regardless of
+what a client sends (`GameRules::normalized`, applied on `SetRules` and again when
+the game is created).
+
+- **Deck:** six colors — red, orange, yellow, green, blue, purple — with six cards
+  each, 3/2/2/2/2/1 of ranks 1-6 (72 cards, max score 36). Exactly the deck of
+  `extra_colors: 1` + `six_cards: true`.
+- **Color clues:** only the three primary colors (red, yellow, blue) can be named
+  (`ActionError::CannotClueSecondaryColor` otherwise). The other colors are mixed
+  from them — **orange = red + yellow, green = yellow + blue, purple = red + blue**
+  — and a clue touches every card whose color contains the named primary. So a red
+  clue touches red, orange *and* purple cards; yellow touches yellow, orange and
+  green; blue touches blue, green and purple. Number clues are unchanged.
+- **What a player knows about their own cards:** a red hit means "red, orange or
+  purple", not "red", so hanabii mode keeps its evidence as primary-color results
+  (`CardKnowledge::hit_primaries` / `missed_primaries`) instead of a claimed color.
+  The card face only takes a color once the clues leave a single possibility (red and
+  yellow both hit → orange; red and yellow both missed → blue), and the struck-through
+  "ruled out" marks follow the composition: a red miss strikes R, O and P at once, a
+  red hit strikes Y, G and B.
+- **Where the rules live:** `GameRules::color_clue_touches` / `clue_touches` are the
+  single definition of what a clue touches, shared by the engine and the frontend's
+  hover preview; `GameRules::cluable_colors` is what the clue buttons offer.
 
 ## Server protocol (v1)
 

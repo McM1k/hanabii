@@ -46,10 +46,64 @@ pub fn JoinScreen() -> impl IntoView {
     }
 }
 
+/// The class for one of the ordinary option blocks below: dimmed and
+/// inert-looking while the hanabii mode is on, since that mode is a fixed
+/// preset that replaces all of them (the server swaps the preset in when
+/// it's picked and echoes it back, so the locked controls show exactly what
+/// the mode plays with).
+fn rule_group_class(ctx: AppContext) -> &'static str {
+    if ctx.rules.get().hanabii {
+        "rule-group rule-group-locked"
+    } else {
+        "rule-group"
+    }
+}
+
+/// Renders the "hanabii mode" lobby control: one on/off toggle for the
+/// fixed preset described in `GameRules::hanabii` — six colors, six-card
+/// suits, and primary-color-only clues where orange, green and purple are
+/// mixed from red, yellow and blue. While it's on, every other option is
+/// locked (see `rule_group_class`).
+///
+/// Same server-authoritative pattern as every other toggle here: this only
+/// ever asks for the change, and the `RulesUpdated` echo is what moves the
+/// checkbox. Picking the mode just flags it — the server replaces the rest
+/// with the preset. Un-picking goes back to a plain default game rather
+/// than leaving the preset's options ticked behind it, so unticking really
+/// does mean "back to normal".
+fn hanabii_mode_control(ctx: AppContext) -> impl IntoView {
+    let on_toggle = move |_| {
+        let rules = ctx.rules.get_untracked();
+        let rules = if rules.hanabii {
+            GameRules::default()
+        } else {
+            GameRules { hanabii: true, ..rules }
+        };
+        ctx.send(ClientMessage::SetRules { rules });
+    };
+
+    view! {
+        <div class="rule-group">
+            <label class="rule-toggle">
+                <input
+                    type="checkbox"
+                    prop:checked=move || ctx.rules.get().hanabii
+                    on:change=on_toggle
+                />
+                <span>"Hanabii mode"</span>
+            </label>
+            <p class="hint">
+                "The real deal: six colors (red, orange, yellow, green, blue, purple) with six cards each — three 1s, two each of 2 to 5, one 6 — for a max score of 36. Only the primary colors (red, yellow, blue) can be clued, and every other color is mixed from them: orange is red + yellow, green is yellow + blue, purple is red + blue. So a red clue touches every red, orange and purple card. Picking it locks all the other options below."
+            </p>
+        </div>
+    }
+}
+
 /// Renders one optional suit's lobby controls: a main on/off toggle, its
 /// blurb, and a "short deck" sub-toggle (one copy of each rank instead of
 /// the usual distribution) that's only meaningful — and only enabled —
-/// once the suit itself is on.
+/// once the suit itself is on. Both are locked while the hanabii mode is
+/// on (see `hanabii_mode_control`).
 ///
 /// `get`/`set` read and write the suit's own on/off flag; `get_short`/
 /// `set_short` do the same for its short-deck flag. Rules are
@@ -82,9 +136,14 @@ fn suit_rule_toggle(
     };
 
     view! {
-        <div class="rule-group">
+        <div class=move || rule_group_class(ctx)>
             <label class="rule-toggle">
-                <input type="checkbox" prop:checked=move || get(&ctx.rules.get()) on:change=on_toggle />
+                <input
+                    type="checkbox"
+                    prop:checked=move || get(&ctx.rules.get())
+                    disabled=move || ctx.rules.get().hanabii
+                    on:change=on_toggle
+                />
                 <span>{label}</span>
             </label>
             <p class="hint">{blurb}</p>
@@ -92,7 +151,7 @@ fn suit_rule_toggle(
                 <input
                     type="checkbox"
                     prop:checked=move || get_short(&ctx.rules.get())
-                    disabled=move || !get(&ctx.rules.get())
+                    disabled=move || ctx.rules.get().hanabii || !get(&ctx.rules.get())
                     on:change=on_toggle_short
                 />
                 <span>"Only 1 of each card (harder)"</span>
@@ -120,11 +179,12 @@ fn extra_colors_control(ctx: AppContext) -> impl IntoView {
     };
 
     view! {
-        <div class="rule-group">
+        <div class=move || rule_group_class(ctx)>
             <label class="rule-select">
                 <span>"Extra colors"</span>
                 <select
                     prop:value=move || ctx.rules.get().extra_colors.to_string()
+                    disabled=move || ctx.rules.get().hanabii
                     on:change=on_change_count
                 >
                     <option value="0">"0"</option>
@@ -137,7 +197,10 @@ fn extra_colors_control(ctx: AppContext) -> impl IntoView {
                 <input
                     type="checkbox"
                     prop:checked=move || ctx.rules.get().extra_colors_short
-                    disabled=move || ctx.rules.get().extra_colors == 0
+                    disabled=move || {
+                        let rules = ctx.rules.get();
+                        rules.hanabii || rules.extra_colors == 0
+                    }
                     on:change=on_toggle_short
                 />
                 <span>"Only 1 of each card (harder)"</span>
@@ -160,11 +223,12 @@ fn six_cards_control(ctx: AppContext) -> impl IntoView {
     };
 
     view! {
-        <div class="rule-group">
+        <div class=move || rule_group_class(ctx)>
             <label class="rule-toggle">
                 <input
                     type="checkbox"
                     prop:checked=move || ctx.rules.get().six_cards
+                    disabled=move || ctx.rules.get().hanabii
                     on:change=on_toggle
                 />
                 <span>"Six-card suits"</span>
@@ -200,6 +264,9 @@ pub fn Lobby() -> impl IntoView {
             </ul>
 
             <div class="rules-picker">
+                <h3>"Game mode"</h3>
+                {hanabii_mode_control(ctx)}
+
                 <h3>"House rules"</h3>
 
                 {suit_rule_toggle(

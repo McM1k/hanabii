@@ -127,4 +127,41 @@ mod tests {
         assert_eq!(view.rules, GameRules { multicolor: true, black: false, ..Default::default() });
         assert_eq!(view.fireworks.len(), 6);
     }
+
+    #[test]
+    fn hanabii_view_carries_the_mode_and_the_primary_color_evidence() {
+        let mut g = GameState::new(2, 5, GameRules { hanabii: true, ..Default::default() });
+        // Pin player 1's first card to orange so a red clue is guaranteed
+        // to touch it (red + yellow), whatever the seed dealt.
+        g.hands.get_mut(&PlayerId(1)).unwrap()[0].card = crate::card::Card {
+            color: Color::Orange,
+            number: 2,
+        };
+        g.apply_action(
+            PlayerId(0),
+            crate::state::Action::Clue {
+                target: PlayerId(1),
+                clue: crate::card::Clue::Color(Color::Red),
+            },
+        )
+        .unwrap();
+
+        let view = g.view_for(PlayerId(1));
+        // The mode (and so the six-color, six-rank setup it stands for)
+        // reaches the client as the concrete, locked-in rules.
+        assert!(view.rules.hanabii);
+        assert_eq!(view.rules, view.rules.normalized());
+        assert_eq!(view.fireworks.len(), 6);
+
+        // Player 1 can't see their own card, but does see what the clue
+        // told them: touched by red, so red, orange or purple.
+        let own = &view.hands[&PlayerId(1)][0];
+        assert!(own.card.is_none());
+        assert!(own.knowledge.hit_primaries.contains(&Color::Red));
+        assert_eq!(
+            own.knowledge.hanabii_possible_colors(&view.rules),
+            vec![Color::Red, Color::Orange, Color::Purple]
+        );
+        assert_eq!(own.knowledge.known_color, None);
+    }
 }

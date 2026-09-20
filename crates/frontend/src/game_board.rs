@@ -2,11 +2,11 @@ use std::cell::RefCell;
 use std::collections::{HashMap, HashSet};
 use std::rc::Rc;
 
-use leptos::html::Div;
+use leptos::html::{Div, Span};
 use leptos::*;
 
 use game_core::{
-    next_expected_rank, points_for, Action, CardId, ClientMessage, Clue, Color, EndReason,
+    next_expected_rank, points_for, Action, Card, CardId, ClientMessage, Clue, Color, EndReason,
     GameRules, GameStatus, LastMove, PlayerId, VisibleCard, MAX_CLUE_TOKENS, MAX_FUSE_TOKENS,
 };
 
@@ -59,41 +59,107 @@ fn dragged_card_id(ev: &web_sys::DragEvent) -> Option<CardId> {
     id_str.parse::<u32>().ok().map(CardId)
 }
 
-/// The distinct colors and numbers actually present in a hand — the only
-/// clues that wouldn't be rejected by the engine as touching zero cards.
+/// The distinct colors and numbers that would actually touch something in
+/// a hand — the only clues that wouldn't be rejected by the engine as
+/// touching zero cards.
 ///
-/// A multicolor card counts as *every* color when receiving a clue (see
-/// `GameState::apply_clue` in game-core), so once a hand holds one, every
-/// cluable color in the game becomes valid for that hand even if none of
-/// its other cards are actually that color — but multicolor itself can
-/// never be the color named in a clue, so it's never included here. Black
-/// is the opposite case: it has no color at all, so it's excluded outright
-/// rather than ever making a color clue valid.
+/// The colors offered come from `GameRules::cluable_colors` (every active
+/// color but Multicolor and Black ordinarily; just red, yellow and blue in
+/// hanabii mode), each kept only if `GameRules::color_clue_touches` says it
+/// would touch at least one card here. That one definition covers all the
+/// special cases: a multicolor card counts as *every* color when receiving
+/// a clue, so a hand holding one makes every cluable color valid; black is
+/// touched by nothing, so it never makes a color valid; and in hanabii mode
+/// a red clue is valid for a hand holding only an orange card, since red is
+/// one of orange's ingredients.
 fn valid_clues(cards: &[VisibleCard], rules: &GameRules) -> (Vec<Color>, Vec<u8>) {
-    let has_multicolor = cards
-        .iter()
-        .any(|c| c.card.map(|card| card.color) == Some(Color::Multicolor));
+    let visible: Vec<Card> = cards.iter().filter_map(|c| c.card).collect();
 
-    let mut colors: Vec<Color> = if has_multicolor {
-        rules
-            .active_colors()
-            .into_iter()
-            .filter(|&color| color != Color::Black && color != Color::Multicolor)
-            .collect()
-    } else {
-        cards
-            .iter()
-            .filter_map(|c| c.card.map(|card| card.color))
-            .filter(|&color| color != Color::Black)
-            .collect()
-    };
+    let mut colors: Vec<Color> = rules
+        .cluable_colors()
+        .into_iter()
+        .filter(|&clue| {
+            visible
+                .iter()
+                .any(|card| rules.color_clue_touches(clue, card.color))
+        })
+        .collect();
     colors.sort();
     colors.dedup();
 
-    let mut numbers: Vec<u8> = cards.iter().filter_map(|c| c.card.map(|card| card.number)).collect();
+    let mut numbers: Vec<u8> = visible.iter().map(|card| card.number).collect();
     numbers.sort();
     numbers.dedup();
     (colors, numbers)
+}
+
+/// Joins names as "a", "a and b" or "a, b and c".
+fn join_with_and(names: &[String]) -> String {
+    match names {
+        [] => String::new(),
+        [only] => only.clone(),
+        [init @ .., last] => format!("{} and {last}", init.join(", ")),
+    }
+}
+
+/// What a color clue would touch, worded for a button tooltip — only worth
+/// showing where it isn't obvious from the button itself, i.e. in hanabii
+/// mode, where a red clue also touches orange and purple cards. Empty
+/// (which browsers show no tooltip for) in an ordinary game.
+fn clue_touch_tooltip(rules: &GameRules, clue: Color) -> String {
+    if !rules.hanabii {
+        return String::new();
+    }
+    let names: Vec<String> = rules
+        .active_colors()
+        .into_iter()
+        .filter(|&color| rules.color_clue_touches(clue, color))
+        .map(|color| format!("{color:?}").to_lowercase())
+        .collect();
+    format!("Touches {} cards", join_with_and(&names))
+}
+
+/// Hanabii mode's version of an own-hand card's "ruled out" marks: all six
+/// colors in fixed slots (three per row, in the game's display order), so
+/// what a card could be reads at a glance. A color the clues so far have
+/// ruled out is struck through — exactly like every other ruled-out mark —
+/// and one that's still possible is left bold, which is the part an
+/// ordinary game never needs: a red clue that *hits* doesn't say "red",
+/// it says "red, orange or purple", so the marks show R, O and P standing
+/// with Y, G and B struck; one that *misses* strikes R, O and P instead.
+///
+/// `None` until some clue has actually narrowed things down (a fresh card
+/// shows nothing, same as elsewhere) — and the caller doesn't show it once
+/// the color is settled, since the card face itself takes that color then.
+fn hanabii_color_strip(
+    knowledge: &game_core::CardKnowledge,
+    rules: &GameRules,
+) -> Option<leptos::HtmlElement<Span>> {
+    let active = rules.active_colors();
+    let possible = knowledge.hanabii_possible_colors(rules);
+    if possible.len() == active.len() {
+        return None;
+    }
+
+    let names: Vec<String> = possible
+        .iter()
+        .map(|color| format!("{color:?}").to_lowercase())
+        .collect();
+    let tooltip = format!("Could still be {}", join_with_and(&names));
+
+    let cells = active
+        .into_iter()
+        .map(|color| {
+            let class = if possible.contains(&color) {
+                format!("cand-mark not-mark-{}", color_class(color))
+            } else {
+                format!("not-mark not-mark-{}", color_class(color))
+            };
+            view! { <span class=class>{color_initial(color)}</span> }
+        })
+        .collect_view();
+
+    Some(view! { <span class="not-row color-strip" title=tooltip>{cells}</span> })
 }
 
 /// All seated players, starting from whoever's turn it is right now and
@@ -605,12 +671,24 @@ fn ready_board(
 
     let hand_refs_for_children = hand_refs.clone();
 
+    // Rules are frozen once the game starts, so this can be decided once
+    // here rather than reactively. A quick reminder of the one thing that's
+    // easy to forget mid-game: which colors a clue really touches.
+    let hanabii_hint = initial.rules.hanabii.then(|| {
+        view! {
+            <p class="hint">
+                "Hanabii mode: only red, yellow and blue can be clued. Orange is red + yellow, green is yellow + blue and purple is red + blue — so a red clue touches every red, orange and purple card, and so on."
+            </p>
+        }
+    });
+
     view! {
         <div>
             {coarse}
 
             <div class="panel">
                 <p class="hint">"Top of the list plays next. Click another player's name to see clues you can give them."</p>
+                {hanabii_hint}
                 <For
                     each=move || {
                         let Some(view) = ctx.view.get() else { return Vec::new() };
@@ -749,6 +827,26 @@ fn ready_board(
                                             parts.join(" ")
                                         };
 
+                                        // In hanabii mode a color clue never simply
+                                        // "makes the card red": a red hit means red,
+                                        // orange *or* purple. The card's color only counts
+                                        // as known once the primary-color clues so far
+                                        // leave a single possibility (e.g. red and yellow
+                                        // both hit → orange; red and yellow both missed →
+                                        // blue) — and the marks below follow the same
+                                        // composition, so a red miss strikes R, O and P
+                                        // at once and a red hit strikes Y, G and B.
+                                        let hanabii_color = if view.rules.hanabii {
+                                            c.knowledge.hanabii_certain_color(&view.rules)
+                                        } else {
+                                            None
+                                        };
+                                        let color_settled = if view.rules.hanabii {
+                                            hanabii_color.is_some()
+                                        } else {
+                                            c.knowledge.known_color.is_some()
+                                                || c.knowledge.inferred_black(&view.rules)
+                                        };
                                         // Ruled-out colors/numbers, shown
                                         // only while that aspect is still
                                         // uncertain — once the color (or a
@@ -756,33 +854,33 @@ fn ready_board(
                                         // number is already known above,
                                         // repeating what it *isn't* is just
                                         // clutter.
-                                        let not_colors_row = (c.knowledge.known_color.is_none()
-                                            && !c.knowledge.inferred_black(&view.rules))
-                                            .then(|| {
-                                                let ruled_out: Vec<Color> = view
-                                                    .rules
-                                                    .active_colors()
-                                                    .into_iter()
-                                                    .filter(|nc| c.knowledge.not_colors.contains(nc))
-                                                    .collect();
-                                                (!ruled_out.is_empty()).then(|| {
-                                                    let marks = ruled_out
-                                                        .iter()
-                                                        .map(|&nc| {
-                                                            view! {
-                                                                <span class=format!(
-                                                                    "not-mark not-mark-{}",
-                                                                    color_class(nc),
-                                                                )>
-                                                                    {color_initial(nc)}
-                                                                </span>
-                                                            }
-                                                        })
-                                                        .collect_view();
-                                                    view! { <span class="not-row">{marks}</span> }
-                                                })
+                                        let not_colors_row = if color_settled {
+                                            None
+                                        } else if view.rules.hanabii {
+                                            // Fixed-slot marks showing what's still
+                                            // possible as well as what's struck out —
+                                            // see `hanabii_color_strip`.
+                                            hanabii_color_strip(&c.knowledge, &view.rules)
+                                        } else {
+                                            let ruled_out: Vec<Color> =
+                                                c.knowledge.ruled_out_colors(&view.rules);
+                                            (!ruled_out.is_empty()).then(|| {
+                                                let marks = ruled_out
+                                                    .iter()
+                                                    .map(|&nc| {
+                                                        view! {
+                                                            <span class=format!(
+                                                                "not-mark not-mark-{}",
+                                                                color_class(nc),
+                                                            )>
+                                                                {color_initial(nc)}
+                                                            </span>
+                                                        }
+                                                    })
+                                                    .collect_view();
+                                                view! { <span class="not-row">{marks}</span> }
                                             })
-                                            .flatten();
+                                        };
                                         let not_numbers_row = c
                                             .knowledge
                                             .known_number
@@ -810,7 +908,12 @@ fn ready_board(
                                         // players see it — "card-own" carries
                                         // the stacked-info layout regardless
                                         // of which of these applies.
-                                        let color_class_name = if c.knowledge.inferred_multicolor() {
+                                        let color_class_name = if view.rules.hanabii {
+                                            match hanabii_color {
+                                                Some(color) => format!("card-{}", color_class(color)),
+                                                None => "card-unknown".to_string(),
+                                            }
+                                        } else if c.knowledge.inferred_multicolor() {
                                             "card-multicolor".to_string()
                                         } else if c.knowledge.inferred_black(&view.rules) {
                                             "card-black".to_string()
@@ -862,13 +965,13 @@ fn ready_board(
                                     .iter()
                                     .map(|c| {
                                         let card = c.card.expect("other players' cards are always visible");
+                                        // Same definition of "touches" the engine uses,
+                                        // so the preview can't drift from what the
+                                        // clue would actually do — including, in
+                                        // hanabii mode, a red clue lighting up
+                                        // orange and purple cards too.
                                         let is_targeted = preview_clue
-                                            .map(|clue| match clue {
-                                                Clue::Color(clue_color) => {
-                                                    card.color == clue_color || card.color == Color::Multicolor
-                                                }
-                                                Clue::Number(n) => card.number == n,
-                                            })
+                                            .map(|clue| view.rules.clue_touches(clue, card))
                                             .unwrap_or(false);
                                         let mut class = if is_targeted {
                                             format!("card card-{} card-clue-target", color_class(card.color))
@@ -903,9 +1006,11 @@ fn ready_board(
                             let color_buttons = valid_colors
                                 .iter()
                                 .map(|&color| {
+                                    let tooltip = clue_touch_tooltip(&view.rules, color);
                                     view! {
                                         <button
                                             class=format!("clue-btn card-{}", color_class(color))
+                                            title=tooltip
                                             disabled=!can_clue
                                             on:mouseenter=move |_| {
                                                 set_hovered_clue.set(Some(Clue::Color(color)));
@@ -1033,5 +1138,109 @@ pub fn GameBoard() -> impl IntoView {
                 }}
             </Show>
         </div>
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use game_core::CardKnowledge;
+
+    fn hand(cards: &[(Color, u8)]) -> Vec<VisibleCard> {
+        cards
+            .iter()
+            .enumerate()
+            .map(|(i, &(color, number))| VisibleCard {
+                id: CardId(i as u32),
+                card: Some(Card { color, number }),
+                knowledge: CardKnowledge::default(),
+            })
+            .collect()
+    }
+
+    fn hanabii() -> GameRules {
+        GameRules { hanabii: true, ..Default::default() }.normalized()
+    }
+
+    #[test]
+    fn hanabii_offers_only_the_primaries_that_would_touch_something() {
+        // Two orange cards: red and yellow both touch them (orange is red +
+        // yellow), blue touches neither.
+        let (colors, numbers) = valid_clues(&hand(&[(Color::Orange, 1), (Color::Orange, 2)]), &hanabii());
+        assert_eq!(colors, vec![Color::Red, Color::Yellow]);
+        assert_eq!(numbers, vec![1, 2]);
+    }
+
+    #[test]
+    fn hanabii_never_offers_a_secondary_color_as_a_clue() {
+        // Every secondary in the hand — and each primary is a valid clue
+        // for two of them — but orange, green and purple themselves are
+        // never on offer.
+        let cards = hand(&[(Color::Green, 1), (Color::Purple, 2), (Color::Orange, 3)]);
+        let (colors, _) = valid_clues(&cards, &hanabii());
+        assert_eq!(colors, vec![Color::Red, Color::Yellow, Color::Blue]);
+    }
+
+    #[test]
+    fn hanabii_single_cards_offer_exactly_their_ingredients() {
+        assert_eq!(valid_clues(&hand(&[(Color::Red, 3)]), &hanabii()).0, vec![Color::Red]);
+        assert_eq!(
+            valid_clues(&hand(&[(Color::Green, 3)]), &hanabii()).0,
+            vec![Color::Yellow, Color::Blue]
+        );
+        assert_eq!(
+            valid_clues(&hand(&[(Color::Purple, 3)]), &hanabii()).0,
+            vec![Color::Red, Color::Blue]
+        );
+    }
+
+    #[test]
+    fn ordinary_games_offer_the_colors_present_in_the_hand() {
+        let cards = hand(&[(Color::Red, 1), (Color::Blue, 2), (Color::Blue, 3)]);
+        let (colors, numbers) = valid_clues(&cards, &GameRules::default());
+        assert_eq!(colors, vec![Color::Red, Color::Blue]);
+        assert_eq!(numbers, vec![1, 2, 3]);
+    }
+
+    #[test]
+    fn a_multicolor_card_makes_every_cluable_color_valid() {
+        let rules = GameRules { multicolor: true, extra_colors: 1, ..Default::default() };
+        let (colors, _) = valid_clues(&hand(&[(Color::Multicolor, 3)]), &rules);
+        // Everything in play except Multicolor itself (never named in a
+        // clue) — and no White, which `extra_colors: 1` drops.
+        assert_eq!(
+            colors,
+            vec![Color::Red, Color::Yellow, Color::Green, Color::Blue, Color::Orange, Color::Purple]
+        );
+    }
+
+    #[test]
+    fn a_black_card_never_makes_a_color_clue_valid() {
+        let rules = GameRules { black: true, ..Default::default() };
+        let (colors, numbers) = valid_clues(&hand(&[(Color::Black, 5)]), &rules);
+        assert!(colors.is_empty());
+        assert_eq!(numbers, vec![5]);
+    }
+
+    #[test]
+    fn clue_tooltips_name_everything_a_hanabii_clue_touches() {
+        let rules = hanabii();
+        assert_eq!(clue_touch_tooltip(&rules, Color::Red), "Touches red, orange and purple cards");
+        assert_eq!(clue_touch_tooltip(&rules, Color::Yellow), "Touches orange, yellow and green cards");
+        assert_eq!(clue_touch_tooltip(&rules, Color::Blue), "Touches green, blue and purple cards");
+    }
+
+    #[test]
+    fn clue_tooltips_are_left_off_in_ordinary_games() {
+        assert_eq!(clue_touch_tooltip(&GameRules::default(), Color::Red), "");
+    }
+
+    #[test]
+    fn join_with_and_reads_naturally() {
+        let names = |list: &[&str]| list.iter().map(|s| s.to_string()).collect::<Vec<_>>();
+        assert_eq!(join_with_and(&names(&[])), "");
+        assert_eq!(join_with_and(&names(&["red"])), "red");
+        assert_eq!(join_with_and(&names(&["red", "blue"])), "red and blue");
+        assert_eq!(join_with_and(&names(&["red", "orange", "purple"])), "red, orange and purple");
     }
 }

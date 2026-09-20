@@ -36,8 +36,12 @@ const SHORT_NUMBER_COUNTS_SIX: [(u8, u8); 6] = [(1, 1), (2, 1), (3, 1), (4, 1), 
 /// Builds a deck for the given rules — 50 cards normally, plus 10 (5 if
 /// that suit's "short" option is on, 12/6 instead if `six_cards` is also
 /// on) more for each optional suit that's turned on (multicolor, black,
-/// orange, purple).
+/// orange, purple). The hanabii mode is six colors of twelve cards each
+/// (72 cards, 3/2/2/2/2/1 of ranks 1-6 per color).
 pub fn standard_deck(rules: &GameRules) -> Vec<Card> {
+    // The hanabii mode is a fixed preset (see `GameRules::normalized`), so
+    // resolve it to the concrete options it stands for before reading any.
+    let rules = rules.normalized();
     let colors = rules.active_colors();
     let mut deck = Vec::with_capacity(colors.len() * 10);
     for color in colors {
@@ -243,6 +247,67 @@ mod tests {
         let black: Vec<_> = deck.iter().filter(|c| c.color == Color::Black).collect();
         assert_eq!(black.len(), 10);
         assert!(black.iter().all(|c| c.number <= 5));
+    }
+
+    #[test]
+    fn hanabii_deck_is_six_colors_of_twelve_cards_with_the_six_card_distribution() {
+        let rules = GameRules { hanabii: true, ..Default::default() };
+        let deck = standard_deck(&rules);
+        assert_eq!(deck.len(), 72);
+
+        let colors = [
+            Color::Red,
+            Color::Orange,
+            Color::Yellow,
+            Color::Green,
+            Color::Blue,
+            Color::Purple,
+        ];
+        for color in colors {
+            let of_color: Vec<_> = deck.iter().filter(|c| c.color == color).collect();
+            assert_eq!(of_color.len(), 12, "{color:?}");
+            // 3/1 2/2 2/3 2/4 2/5 1/6 — "count / rank".
+            for (rank, count) in [(1, 3), (2, 2), (3, 2), (4, 2), (5, 2), (6, 1)] {
+                assert_eq!(
+                    of_color.iter().filter(|c| c.number == rank).count(),
+                    count,
+                    "{color:?} rank {rank}"
+                );
+            }
+        }
+        // Nothing but those six colors.
+        assert!(deck.iter().all(|c| colors.contains(&c.color)));
+    }
+
+    #[test]
+    fn hanabii_deck_ignores_every_other_option() {
+        // Multicolor, black, short suits and a different extra-colors
+        // count all switched on — none of it shows up in the deck.
+        let greedy = GameRules {
+            multicolor: true,
+            black: true,
+            extra_colors: 2,
+            multicolor_short: true,
+            black_short: true,
+            extra_colors_short: true,
+            hanabii: true,
+            ..Default::default()
+        };
+        let plain = GameRules { hanabii: true, ..Default::default() };
+        let mut a = standard_deck(&greedy);
+        let mut b = standard_deck(&plain);
+        a.sort_by_key(|c| (c.color as u8, c.number));
+        b.sort_by_key(|c| (c.color as u8, c.number));
+        assert_eq!(a, b);
+    }
+
+    #[test]
+    fn hanabii_deck_matches_the_hand_built_extra_colors_one_six_cards_deck() {
+        // "Until then it's just like six-card suits with six colors" — the
+        // mode's deck is exactly that game's deck.
+        let by_hand = GameRules { extra_colors: 1, six_cards: true, ..Default::default() };
+        let mode = GameRules { hanabii: true, ..Default::default() };
+        assert_eq!(standard_deck(&by_hand), standard_deck(&mode));
     }
 
     #[test]

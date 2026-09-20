@@ -194,6 +194,29 @@ button:disabled {
   cursor: default;
 }
 
+/* Dimmed while the hanabii mode is on: it's a fixed preset that replaces
+   these options, so they show what it plays with but can't be changed. */
+.rule-group-locked {
+  opacity: 0.5;
+}
+
+.rule-group-locked,
+.rule-group-locked .rule-toggle,
+.rule-group-locked .rule-toggle input[type="checkbox"],
+.rule-group-locked .rule-select select {
+  cursor: default;
+}
+
+/* The group as a whole is already dimmed — don't dim its own disabled
+   sub-toggle a second time on top of that. */
+.rule-group-locked .rule-toggle-sub:has(input:disabled) {
+  opacity: 1;
+}
+
+.rules-picker h3:not(:first-child) {
+  margin-top: 1.25rem;
+}
+
 .rules-picker .hint {
   margin-top: 0.4rem;
 }
@@ -649,6 +672,31 @@ button:disabled {
   font-size: 0.55rem;
   text-decoration: line-through;
   opacity: 0.85;
+}
+
+/* Hanabii mode: all six colors in fixed slots (three per row) — struck
+   through where ruled out like any other `.not-mark`, bold where still
+   possible. See `hanabii_color_strip` in game_board.rs. The slots are a
+   fixed width so the letters line up from card to card, and the three of
+   them (plus gaps) fit inside a card's 2.3rem face. */
+.not-row.color-strip {
+  display: grid;
+  grid-template-columns: repeat(3, 0.5rem);
+  justify-content: center;
+  gap: 0.05rem;
+  text-align: center;
+}
+
+.cand-mark {
+  font-size: 0.55rem;
+  font-weight: 700;
+  line-height: 1.15;
+}
+
+/* Fade the struck ones a bit further than a plain ruled-out mark, so the
+   bold survivors stand out at a glance. */
+.color-strip .not-mark {
+  opacity: 0.55;
 }
 
 .not-mark-white {
