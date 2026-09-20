@@ -661,6 +661,22 @@ button:disabled {
   color: var(--paper-dim);
 }
 
+/* Hanabii mode: a card a color clue has touched, but whose color isn't
+   certain yet, keeps its neutral face and takes that clue's color as its
+   contour. Once the color is certain the whole face turns that color
+   instead (.card-<color> above). An inset ring, so it never changes the
+   card's size — and it can't clash with the draw-highlight glow, since a
+   freshly drawn card has no clues yet. */
+.card-hit-red {
+  box-shadow: inset 0 0 0 3px var(--red-fw);
+}
+.card-hit-yellow {
+  box-shadow: inset 0 0 0 3px var(--yellow-fw);
+}
+.card-hit-blue {
+  box-shadow: inset 0 0 0 3px var(--blue-fw);
+}
+
 .not-row {
   display: flex;
   justify-content: center;
@@ -672,31 +688,6 @@ button:disabled {
   font-size: 0.55rem;
   text-decoration: line-through;
   opacity: 0.85;
-}
-
-/* Hanabii mode: all six colors in fixed slots (three per row) — struck
-   through where ruled out like any other `.not-mark`, bold where still
-   possible. See `hanabii_color_strip` in game_board.rs. The slots are a
-   fixed width so the letters line up from card to card, and the three of
-   them (plus gaps) fit inside a card's 2.3rem face. */
-.not-row.color-strip {
-  display: grid;
-  grid-template-columns: repeat(3, 0.5rem);
-  justify-content: center;
-  gap: 0.05rem;
-  text-align: center;
-}
-
-.cand-mark {
-  font-size: 0.55rem;
-  font-weight: 700;
-  line-height: 1.15;
-}
-
-/* Fade the struck ones a bit further than a plain ruled-out mark, so the
-   bold survivors stand out at a glance. */
-.color-strip .not-mark {
-  opacity: 0.55;
 }
 
 .not-mark-white {

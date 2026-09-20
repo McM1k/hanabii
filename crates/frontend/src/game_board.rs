@@ -2,7 +2,7 @@ use std::cell::RefCell;
 use std::collections::{HashMap, HashSet};
 use std::rc::Rc;
 
-use leptos::html::{Div, Span};
+use leptos::html::Div;
 use leptos::*;
 
 use game_core::{
@@ -119,47 +119,26 @@ fn clue_touch_tooltip(rules: &GameRules, clue: Color) -> String {
     format!("Touches {} cards", join_with_and(&names))
 }
 
-/// Hanabii mode's version of an own-hand card's "ruled out" marks: all six
-/// colors in fixed slots (three per row, in the game's display order), so
-/// what a card could be reads at a glance. A color the clues so far have
-/// ruled out is struck through — exactly like every other ruled-out mark —
-/// and one that's still possible is left bold, which is the part an
-/// ordinary game never needs: a red clue that *hits* doesn't say "red",
-/// it says "red, orange or purple", so the marks show R, O and P standing
-/// with Y, G and B struck; one that *misses* strikes R, O and P instead.
+/// The CSS class for the colored outline hanabii mode draws around one of
+/// your own cards: the color of the clue that touched it, kept for as long
+/// as the card's actual color is still uncertain. Once the clues pin the
+/// color down the whole card face turns that color instead (see the
+/// `card-<color>` classes), so there's nothing left to outline — and a card
+/// no color clue has touched yet has none either.
 ///
-/// `None` until some clue has actually narrowed things down (a fresh card
-/// shows nothing, same as elsewhere) — and the caller doesn't show it once
-/// the color is settled, since the card face itself takes that color then.
-fn hanabii_color_strip(
+/// Only primaries ever come out (they're the only colors a clue can name),
+/// and it's never ambiguous: a card touched by two different primaries is
+/// always settled. `None` in every other game mode.
+fn hanabii_outline_class(
     knowledge: &game_core::CardKnowledge,
     rules: &GameRules,
-) -> Option<leptos::HtmlElement<Span>> {
-    let active = rules.active_colors();
-    let possible = knowledge.hanabii_possible_colors(rules);
-    if possible.len() == active.len() {
+) -> Option<String> {
+    if !rules.hanabii || knowledge.hanabii_certain_color(rules).is_some() {
         return None;
     }
-
-    let names: Vec<String> = possible
-        .iter()
-        .map(|color| format!("{color:?}").to_lowercase())
-        .collect();
-    let tooltip = format!("Could still be {}", join_with_and(&names));
-
-    let cells = active
-        .into_iter()
-        .map(|color| {
-            let class = if possible.contains(&color) {
-                format!("cand-mark not-mark-{}", color_class(color))
-            } else {
-                format!("not-mark not-mark-{}", color_class(color))
-            };
-            view! { <span class=class>{color_initial(color)}</span> }
-        })
-        .collect_view();
-
-    Some(view! { <span class="not-row color-strip" title=tooltip>{cells}</span> })
+    knowledge
+        .hanabii_hit_primary()
+        .map(|primary| format!("card-hit-{}", color_class(primary)))
 }
 
 /// All seated players, starting from whoever's turn it is right now and
@@ -677,7 +656,7 @@ fn ready_board(
     let hanabii_hint = initial.rules.hanabii.then(|| {
         view! {
             <p class="hint">
-                "Hanabii mode: only red, yellow and blue can be clued. Orange is red + yellow, green is yellow + blue and purple is red + blue — so a red clue touches every red, orange and purple card, and so on."
+                "Hanabii mode: only red, yellow and blue can be clued. Orange is red + yellow, green is yellow + blue and purple is red + blue — so a red clue touches every red, orange and purple card, and so on. On your own cards, a colored outline is a clue that touched the card, a struck letter is one that missed it, and the whole card fills in once its color is certain."
             </p>
         }
     });
@@ -829,13 +808,15 @@ fn ready_board(
 
                                         // In hanabii mode a color clue never simply
                                         // "makes the card red": a red hit means red,
-                                        // orange *or* purple. The card's color only counts
-                                        // as known once the primary-color clues so far
-                                        // leave a single possibility (e.g. red and yellow
-                                        // both hit → orange; red and yellow both missed →
-                                        // blue) — and the marks below follow the same
-                                        // composition, so a red miss strikes R, O and P
-                                        // at once and a red hit strikes Y, G and B.
+                                        // orange *or* purple. So the card's color only
+                                        // counts as known once the primary-color clues
+                                        // so far leave a single possibility (red and
+                                        // yellow both hit → orange; red and yellow both
+                                        // missed → blue). Until then the card keeps its
+                                        // neutral face, outlined in the color of the
+                                        // clue that touched it (see
+                                        // `hanabii_outline_class`), and only the
+                                        // primaries get marks — see below.
                                         let hanabii_color = if view.rules.hanabii {
                                             c.knowledge.hanabii_certain_color(&view.rules)
                                         } else {
@@ -854,33 +835,37 @@ fn ready_board(
                                         // number is already known above,
                                         // repeating what it *isn't* is just
                                         // clutter.
-                                        let not_colors_row = if color_settled {
-                                            None
+                                        //
+                                        // In hanabii mode the struck marks are just
+                                        // the primaries a clue has *missed* ("no
+                                        // trace of red in this card"): a hit is
+                                        // already shown by the outline, and orange,
+                                        // green and purple never need a mark of
+                                        // their own — they follow from the three
+                                        // primaries.
+                                        let struck_colors: Vec<Color> = if color_settled {
+                                            Vec::new()
                                         } else if view.rules.hanabii {
-                                            // Fixed-slot marks showing what's still
-                                            // possible as well as what's struck out —
-                                            // see `hanabii_color_strip`.
-                                            hanabii_color_strip(&c.knowledge, &view.rules)
+                                            c.knowledge.hanabii_missed_primaries()
                                         } else {
-                                            let ruled_out: Vec<Color> =
-                                                c.knowledge.ruled_out_colors(&view.rules);
-                                            (!ruled_out.is_empty()).then(|| {
-                                                let marks = ruled_out
-                                                    .iter()
-                                                    .map(|&nc| {
-                                                        view! {
-                                                            <span class=format!(
-                                                                "not-mark not-mark-{}",
-                                                                color_class(nc),
-                                                            )>
-                                                                {color_initial(nc)}
-                                                            </span>
-                                                        }
-                                                    })
-                                                    .collect_view();
-                                                view! { <span class="not-row">{marks}</span> }
-                                            })
+                                            c.knowledge.ruled_out_colors(&view.rules)
                                         };
+                                        let not_colors_row = (!struck_colors.is_empty()).then(|| {
+                                            let marks = struck_colors
+                                                .iter()
+                                                .map(|&nc| {
+                                                    view! {
+                                                        <span class=format!(
+                                                            "not-mark not-mark-{}",
+                                                            color_class(nc),
+                                                        )>
+                                                            {color_initial(nc)}
+                                                        </span>
+                                                    }
+                                                })
+                                                .collect_view();
+                                            view! { <span class="not-row">{marks}</span> }
+                                        });
                                         let not_numbers_row = c
                                             .knowledge
                                             .known_number
@@ -925,6 +910,12 @@ fn ready_board(
 
                                         let card_id = c.id;
                                         let mut li_class = format!("card card-own {color_class_name}");
+                                        if let Some(outline) =
+                                            hanabii_outline_class(&c.knowledge, &view.rules)
+                                        {
+                                            li_class.push(' ');
+                                            li_class.push_str(&outline);
+                                        }
                                         if recently_drawn_now.contains(&card_id) {
                                             li_class.push_str(" card-recent-draw");
                                         }
@@ -1220,6 +1211,57 @@ mod tests {
         let (colors, numbers) = valid_clues(&hand(&[(Color::Black, 5)]), &rules);
         assert!(colors.is_empty());
         assert_eq!(numbers, vec![5]);
+    }
+
+    fn knowledge_after(results: &[(Color, bool)]) -> game_core::CardKnowledge {
+        let rules = hanabii();
+        let mut k = CardKnowledge::default();
+        for &(primary, touched) in results {
+            k.apply_clue_result(Clue::Color(primary), touched, &rules);
+        }
+        k
+    }
+
+    #[test]
+    fn a_touched_but_uncertain_card_is_outlined_in_the_clue_color() {
+        let rules = hanabii();
+        // Red touched it: red, orange or purple — so, a red outline.
+        let k = knowledge_after(&[(Color::Red, true)]);
+        assert_eq!(hanabii_outline_class(&k, &rules).as_deref(), Some("card-hit-red"));
+        // Still uncertain after a yellow miss (red or purple): still red.
+        let k = knowledge_after(&[(Color::Red, true), (Color::Yellow, false)]);
+        assert_eq!(hanabii_outline_class(&k, &rules).as_deref(), Some("card-hit-red"));
+        // Same for the other two primaries.
+        let k = knowledge_after(&[(Color::Yellow, true)]);
+        assert_eq!(hanabii_outline_class(&k, &rules).as_deref(), Some("card-hit-yellow"));
+        let k = knowledge_after(&[(Color::Blue, true)]);
+        assert_eq!(hanabii_outline_class(&k, &rules).as_deref(), Some("card-hit-blue"));
+    }
+
+    #[test]
+    fn a_card_no_clue_has_touched_gets_no_outline() {
+        let rules = hanabii();
+        assert_eq!(hanabii_outline_class(&CardKnowledge::default(), &rules), None);
+        // Only misses so far: nothing touched it.
+        let k = knowledge_after(&[(Color::Red, false)]);
+        assert_eq!(hanabii_outline_class(&k, &rules), None);
+    }
+
+    #[test]
+    fn a_card_whose_color_is_certain_drops_the_outline() {
+        let rules = hanabii();
+        // Red + yellow hit: orange, so the whole face fills in instead.
+        let k = knowledge_after(&[(Color::Red, true), (Color::Yellow, true)]);
+        assert_eq!(hanabii_outline_class(&k, &rules), None);
+        // Red hit, yellow and blue missed: plain red — also certain.
+        let k = knowledge_after(&[(Color::Red, true), (Color::Yellow, false), (Color::Blue, false)]);
+        assert_eq!(hanabii_outline_class(&k, &rules), None);
+    }
+
+    #[test]
+    fn there_is_never_an_outline_outside_hanabii_mode() {
+        let k = knowledge_after(&[(Color::Red, true)]);
+        assert_eq!(hanabii_outline_class(&k, &GameRules::default()), None);
     }
 
     #[test]

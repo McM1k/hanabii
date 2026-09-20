@@ -5,7 +5,7 @@ Axum for the server, Leptos (WASM) for the frontend, WebSockets tying them toget
 
 ## Status
 
-- [x] `game-core` — the rules engine. Compiler-verified, 118/118 tests passing.
+- [x] `game-core` — the rules engine. Compiler-verified, 123/123 tests passing.
 - [x] `server` — Axum + WebSockets, room management. Compiler-verified, 12/12 tests
       passing, join flow tested manually.
 - [x] `frontend` — Leptos UI. Compiler-verified every round (zero errors, zero
@@ -228,10 +228,13 @@ the game is created).
 - **What a player knows about their own cards:** a red hit means "red, orange or
   purple", not "red", so hanabii mode keeps its evidence as primary-color results
   (`CardKnowledge::hit_primaries` / `missed_primaries`) instead of a claimed color.
-  The card face only takes a color once the clues leave a single possibility (red and
-  yellow both hit → orange; red and yellow both missed → blue), and the struck-through
-  "ruled out" marks follow the composition: a red miss strikes R, O and P at once, a
-  red hit strikes Y, G and B.
+  While a card's color is uncertain it keeps a neutral face, **outlined in the color of
+  the clue that touched it** (`card-hit-<color>` — a card can only have been touched by
+  one primary while still uncertain, since two different hits always settle it), and any
+  primary whose clue **missed** it gets a struck-through letter. Only R, Y and B ever get
+  a mark: orange, green and purple follow from them. Once the clues leave a single
+  possibility (red and yellow both hit → orange; red and yellow both missed → blue) the
+  whole card fills in with that color and the outline and marks go away.
 - **Where the rules live:** `GameRules::color_clue_touches` / `clue_touches` are the
   single definition of what a clue touches, shared by the engine and the frontend's
   hover preview; `GameRules::cluable_colors` is what the clue buttons offer.
