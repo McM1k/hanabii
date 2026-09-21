@@ -46,6 +46,55 @@ h1 {
   margin: 0 0 0.25rem;
 }
 
+/* The page title. In hanabii mode it reads "Hanabii" and opens a box with the
+   mode's rules on hover (or focus, so a tap or the keyboard works too). The
+   box is a child of the title and touches its bottom edge — no gap to cross —
+   so it stays open while the pointer moves down into it. */
+.page-title {
+  position: relative;
+  display: inline-block;
+}
+
+.page-title-hanabii {
+  cursor: help;
+  outline: none;
+}
+
+.mode-popover {
+  display: none;
+  position: absolute;
+  z-index: 20;
+  top: 100%;
+  left: 0;
+  width: min(28rem, calc(100vw - 3rem));
+  padding: 0.85rem 1rem;
+  background: var(--night-soft);
+  border: 1px solid var(--ember-dim);
+  border-radius: 4px;
+  box-shadow: 0 10px 28px rgba(0, 0, 0, 0.5);
+  font-family: "Inter", system-ui, sans-serif;
+  font-size: 0.85rem;
+  font-weight: 400;
+  line-height: 1.5;
+  letter-spacing: normal;
+  color: var(--paper);
+  cursor: default;
+}
+
+.mode-popover p {
+  margin: 0 0 0.6rem;
+}
+
+.mode-popover p:last-child {
+  margin-bottom: 0;
+}
+
+.page-title-hanabii:hover .mode-popover,
+.page-title-hanabii:focus .mode-popover,
+.page-title-hanabii:focus-within .mode-popover {
+  display: block;
+}
+
 h2,
 h3 {
   font-family: "Fraunces", Georgia, serif;
@@ -661,20 +710,50 @@ button:disabled {
   color: var(--paper-dim);
 }
 
-/* Hanabii mode: a card a color clue has touched, but whose color isn't
-   certain yet, keeps its neutral face and takes that clue's color as its
-   contour. Once the color is certain the whole face turns that color
-   instead (.card-<color> above). An inset ring, so it never changes the
-   card's size — and it can't clash with the draw-highlight glow, since a
-   freshly drawn card has no clues yet. */
-.card-hit-red {
-  box-shadow: inset 0 0 0 3px var(--red-fw);
+/* Hanabii mode: a card whose color isn't certain yet keeps its neutral face
+   and gets a ring around it made of every color it could still be (equal
+   hard-edged arcs; the list comes from the app as --ring-stops on the card).
+   A card a color clue has touched spins its ring; once the color is certain
+   the whole face turns that color instead (.card-<color> above).
+
+   The ring is drawn on ::after, masked down to just the edge, so it never
+   changes the card's size and never covers what's written on it. Its angle is
+   a registered property so the gradient can be animated in place — without
+   that (older browsers) the ring simply doesn't spin. */
+@property --ring-angle {
+  syntax: "<angle>";
+  inherits: false;
+  initial-value: 0deg;
 }
-.card-hit-yellow {
-  box-shadow: inset 0 0 0 3px var(--yellow-fw);
+
+.card-ring::after {
+  content: "";
+  position: absolute;
+  inset: 0;
+  border-radius: inherit;
+  padding: 3px; /* the ring's thickness */
+  background: conic-gradient(from var(--ring-angle), var(--ring-stops));
+  -webkit-mask: linear-gradient(#000 0 0) content-box, linear-gradient(#000 0 0);
+  -webkit-mask-composite: xor;
+  mask: linear-gradient(#000 0 0) content-box, linear-gradient(#000 0 0);
+  mask-composite: exclude;
+  pointer-events: none;
 }
-.card-hit-blue {
-  box-shadow: inset 0 0 0 3px var(--blue-fw);
+
+.card-ring-spin::after {
+  animation: card-ring-spin 3s linear infinite;
+}
+
+@keyframes card-ring-spin {
+  to {
+    --ring-angle: 360deg;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .card-ring-spin::after {
+    animation: none;
+  }
 }
 
 .not-row {

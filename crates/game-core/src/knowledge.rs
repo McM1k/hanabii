@@ -119,46 +119,14 @@ impl CardKnowledge {
         }
     }
 
-    /// Hanabii mode: the primary color whose clue has *touched* this card,
-    /// when exactly one has — the color the card's outline is drawn in while
-    /// its actual color is still uncertain. A card can be touched by at most
-    /// one primary and still be unsettled (two different hits always pin the
-    /// color down: orange, green or purple), so for any card that still
-    /// needs an outline this is the whole story. `None` means no primary
-    /// has touched it yet — or that two have, in which case the card is
-    /// already settled and its whole face takes its color instead.
-    pub fn hanabii_hit_primary(&self) -> Option<Color> {
-        let mut hits = Color::PRIMARIES
-            .into_iter()
-            .filter(|primary| self.hit_primaries.contains(primary));
-        match (hits.next(), hits.next()) {
-            (Some(only), None) => Some(only),
-            _ => None,
-        }
-    }
-
-    /// Hanabii mode: the primary colors whose clue has *missed* this card,
-    /// in the fixed red, yellow, blue order — what the own-hand card's
-    /// struck-through marks show. Each one reads "no trace of that color in
-    /// this card": a card mixed from red and yellow is missed by a blue
-    /// clue and by nothing else. Only primaries ever get a mark, because
-    /// they're the only colors a clue can name — orange, green and purple
-    /// follow from them.
-    pub fn hanabii_missed_primaries(&self) -> Vec<Color> {
-        Color::PRIMARIES
-            .into_iter()
-            .filter(|primary| self.missed_primaries.contains(primary))
-            .collect()
-    }
-
     /// The colors in play this card is provably *not*, in display order —
     /// what an ordinary game's own-hand "ruled out" marks show. Ordinarily
     /// that's just the colors a clue has missed (`not_colors`); in hanabii
     /// mode it's everything the primary-color evidence contradicts (see
     /// `could_be_hanabii_color`), so a single miss on red rules out red,
     /// orange *and* purple at once. (Hanabii's own-hand display doesn't
-    /// use this: it marks just the primaries — `hanabii_hit_primary` and
-    /// `hanabii_missed_primaries` — and lets the mixed colors follow.)
+    /// use this: it shows what's still *possible* instead — see
+    /// `hanabii_possible_colors` — as a ring around the card.)
     pub fn ruled_out_colors(&self, rules: &GameRules) -> Vec<Color> {
         rules
             .active_colors()
@@ -592,43 +560,11 @@ mod tests {
     }
 
     #[test]
-    fn the_outline_color_is_the_one_primary_that_has_touched_the_card() {
-        let mut k = CardKnowledge::default();
-        assert_eq!(k.hanabii_hit_primary(), None, "no clue yet, nothing to outline");
-
-        hit(&mut k, Color::Red);
-        assert_eq!(k.hanabii_hit_primary(), Some(Color::Red));
-
-        // A miss doesn't change what touched it.
-        miss(&mut k, Color::Yellow);
-        assert_eq!(k.hanabii_hit_primary(), Some(Color::Red));
-
-        for primary in Color::PRIMARIES {
-            let mut k = CardKnowledge::default();
-            hit(&mut k, primary);
-            assert_eq!(k.hanabii_hit_primary(), Some(primary));
-        }
-    }
-
-    #[test]
-    fn a_second_different_hit_settles_the_card_so_there_is_no_outline_left() {
-        // Two different primaries touching a card always identify it
-        // (orange, green or purple) — that card gets its whole face
-        // colored instead, so there's no single outline color to report.
-        let rules = hanabii_rules();
-        let mut k = CardKnowledge::default();
-        hit(&mut k, Color::Red);
-        hit(&mut k, Color::Blue);
-        assert_eq!(k.hanabii_hit_primary(), None);
-        assert_eq!(k.hanabii_certain_color(&rules), Some(Color::Purple));
-    }
-
-    #[test]
     fn an_unsettled_card_is_touched_by_at_most_one_primary() {
-        // The property the outline relies on, checked over every card
-        // color and every subset of the three primary clues: whenever the
-        // color is still uncertain, at most one primary has touched the
-        // card — so "the outline color" is never ambiguous.
+        // Checked over every card color and every subset of the three
+        // primary clues: whenever the color is still uncertain, at most one
+        // primary has touched the card (two different hits always identify
+        // it as orange, green or purple).
         let rules = hanabii_rules();
         for color in rules.active_colors() {
             for subset in 0u8..8 {
@@ -647,29 +583,5 @@ mod tests {
                 }
             }
         }
-    }
-
-    #[test]
-    fn missed_primaries_come_out_in_red_yellow_blue_order() {
-        let mut k = CardKnowledge::default();
-        assert!(k.hanabii_missed_primaries().is_empty());
-
-        miss(&mut k, Color::Blue);
-        miss(&mut k, Color::Red);
-        assert_eq!(k.hanabii_missed_primaries(), vec![Color::Red, Color::Blue]);
-
-        // Only misses count — a hit isn't a "missed" primary.
-        hit(&mut k, Color::Yellow);
-        assert_eq!(k.hanabii_missed_primaries(), vec![Color::Red, Color::Blue]);
-    }
-
-    #[test]
-    fn the_hanabii_marks_are_empty_in_an_ordinary_game() {
-        let rules = GameRules::default();
-        let mut k = CardKnowledge::default();
-        k.apply_clue_result(Clue::Color(Color::Red), true, &rules);
-        k.apply_clue_result(Clue::Color(Color::Blue), false, &rules);
-        assert_eq!(k.hanabii_hit_primary(), None);
-        assert!(k.hanabii_missed_primaries().is_empty());
     }
 }

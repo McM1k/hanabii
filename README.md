@@ -5,7 +5,7 @@ Axum for the server, Leptos (WASM) for the frontend, WebSockets tying them toget
 
 ## Status
 
-- [x] `game-core` — the rules engine. Compiler-verified, 123/123 tests passing.
+- [x] `game-core` — the rules engine. Compiler-verified, 119/119 tests passing.
 - [x] `server` — Axum + WebSockets, room management. Compiler-verified, 12/12 tests
       passing, join flow tested manually.
 - [x] `frontend` — Leptos UI. Compiler-verified every round (zero errors, zero
@@ -228,13 +228,19 @@ the game is created).
 - **What a player knows about their own cards:** a red hit means "red, orange or
   purple", not "red", so hanabii mode keeps its evidence as primary-color results
   (`CardKnowledge::hit_primaries` / `missed_primaries`) instead of a claimed color.
-  While a card's color is uncertain it keeps a neutral face, **outlined in the color of
-  the clue that touched it** (`card-hit-<color>` — a card can only have been touched by
-  one primary while still uncertain, since two different hits always settle it), and any
-  primary whose clue **missed** it gets a struck-through letter. Only R, Y and B ever get
-  a mark: orange, green and purple follow from them. Once the clues leave a single
-  possibility (red and yellow both hit → orange; red and yellow both missed → blue) the
-  whole card fills in with that color and the outline and marks go away.
+  While a card's color is uncertain it keeps a neutral face and gets a **ring made of
+  every color it could still be** (`CardKnowledge::hanabii_possible_colors`; equal
+  hard-edged arcs, drawn from the `--ring-stops` style the app sets on the card — see
+  `hanabii_ring` in `game_board.rs` and `.card-ring` in `style.css`). The ring **spins**
+  on a card a color clue has touched; a card that has only been *missed* by clues gets
+  the same ring standing still (a red miss leaves yellow, green and blue). Once the
+  clues leave a single possibility (red and yellow both hit → orange; red and yellow both
+  missed → blue) the whole card fills in with that color and the ring goes away. There
+  are no struck-through color marks in this mode: the ring already says everything.
+- **Page title:** while the mode is on (ticked in the lobby, or being played) the page
+  title — and the browser tab — read "Hanabii", and hovering (or focusing/tapping) the
+  title opens a box with the mode's rules. The game screen itself carries no hanabii
+  description paragraph.
 - **Where the rules live:** `GameRules::color_clue_touches` / `clue_touches` are the
   single definition of what a clue touches, shared by the engine and the frontend's
   hover preview; `GameRules::cluable_colors` is what the clue buttons offer.
