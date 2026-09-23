@@ -421,50 +421,57 @@ button:disabled {
 }
 
 /* A genuinely complete suit (see `next_expected_rank` in game_board.rs)
-   trades its ordinary dark/light icon color for something more eye-catching
-   — this app's ember accent by default (the same one used for the
-   drawn-card highlight), overridden below for the six suits where ember
-   doesn't contrast well against the tile's own fill (flagged first on
-   Orange). `filter` reads `currentColor` rather than a fixed tint so the
-   glow always matches whichever color actually wins below, instead of
-   needing its own copy of the same override. Three class-selectors deep
-   specifically to outrank the two-deep per-suit rules above
+   stops using its ordinary dark/light icon color and starts cycling through
+   the whole color wheel instead — the burst icon and the tile's contour
+   both. One registered angle, animated on the tile and inherited by the
+   icon, drives it; the icon runs half a turn ahead of the contour so the
+   two are never the same color at the same moment.
+
+   `filter` reads `currentColor`, so the glow always matches the icon; the
+   thin dark edge keeps its shape readable in the moments the cycling color
+   happens to match the tile's own fill. Three class-selectors deep
+   specifically to outrank the two-deep per-suit icon rules above
    (`.firework-white .firework-burst` etc., `.firework-black .firework-burst`
    included) regardless of source order, since this needs to win for every
-   suit, not just whichever's rule happens to come first. */
-.firework-complete .firework-burst.firework-burst--complete {
-  color: var(--ember);
-  filter: drop-shadow(0 0 3px currentColor);
+   suit. */
+@property --cycle-hue {
+  syntax: "<angle>";
+  inherits: true;
+  initial-value: 0deg;
 }
 
-/* Complementary pairs on the color wheel — red/green, orange/blue,
-   yellow/purple — read clearly against every one of these six tiles.
-   White, Black, and Multicolor have no natural complement in this set, so
-   they keep the ember fallback above. Same specificity as the rule above
-   (three classes), placed after it so these six win the tie for their own
-   suit without needing a fourth class just to be unambiguous. */
-.firework-red.firework-complete .firework-burst--complete {
-  color: var(--green-fw);
+@keyframes firework-cycle {
+  to {
+    --cycle-hue: 360deg;
+  }
 }
-.firework-orange.firework-complete .firework-burst--complete {
-  color: var(--blue-fw);
-}
-.firework-yellow.firework-complete .firework-burst--complete {
-  color: var(--purple-fw);
-}
-.firework-green.firework-complete .firework-burst--complete {
-  color: var(--red-fw);
-}
-.firework-blue.firework-complete .firework-burst--complete {
-  color: var(--orange-fw);
-}
-.firework-purple.firework-complete .firework-burst--complete {
-  color: var(--yellow-fw);
+
+.firework-complete .firework-burst.firework-burst--complete {
+  color: oklch(0.8 0.17 calc(var(--cycle-hue) + 180deg));
+  filter: drop-shadow(0 0 1px var(--night)) drop-shadow(0 0 3px currentColor);
 }
 
 .firework-complete {
-  border-color: var(--ember);
-  box-shadow: 0 0 10px 1px rgba(201, 122, 61, 0.45);
+  border-color: oklch(0.8 0.17 var(--cycle-hue));
+  box-shadow: 0 0 10px 1px oklch(0.8 0.17 var(--cycle-hue) / 0.5);
+  animation: firework-cycle 4s linear infinite;
+}
+
+/* A play that completes a suit is also the one that flashes the tile — run
+   both together rather than letting one animation shorthand replace the
+   other. */
+.firework-complete.firework-flash {
+  animation: firework-cycle 4s linear infinite, firework-flash 0.5s ease;
+}
+
+/* No cycling for people who've asked for less motion: hold it at the amber
+   the contour used to be. */
+@media (prefers-reduced-motion: reduce) {
+  .firework-complete,
+  .firework-complete.firework-flash {
+    --cycle-hue: 65deg;
+    animation: none;
+  }
 }
 
 .firework-short-badge {
@@ -640,6 +647,34 @@ button:disabled {
   }
 }
 
+/* The cards the latest clue just touched, on every screen, for a moment.
+   Like .card-recent-draw this is driven by a signal that adds and removes the
+   class (see game_board.rs), so it simply pulses for as long as the class is
+   there. White, so it can't be mistaken for the amber draw glow or the amber
+   hover preview outline. */
+.card-touched {
+  position: relative;
+  z-index: 1;
+  animation: card-touched-pulse 0.5s ease-in-out infinite;
+}
+
+@keyframes card-touched-pulse {
+  0%,
+  100% {
+    box-shadow: 0 0 0 2px rgba(255, 255, 255, 0.95), 0 0 8px 2px rgba(255, 255, 255, 0.55);
+  }
+  50% {
+    box-shadow: 0 0 0 3px #fff, 0 0 18px 6px rgba(255, 255, 255, 0.85);
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .card-touched {
+    animation: none;
+    box-shadow: 0 0 0 3px #fff, 0 0 14px 4px rgba(255, 255, 255, 0.7);
+  }
+}
+
 .card-recent-draw {
   /* Driven by a real signal (set on draw, cleared by its own timeout, see
      game_board.rs) rather than a one-shot animation fired at render time —
@@ -711,10 +746,10 @@ button:disabled {
 }
 
 /* Hanabii mode: a card whose color isn't certain yet keeps its neutral face
-   and gets a ring around it made of every color it could still be (equal
-   hard-edged arcs; the list comes from the app as --ring-stops on the card).
-   A card a color clue has touched spins its ring; once the color is certain
-   the whole face turns that color instead (.card-<color> above).
+   and gets a spinning ring around it made of every color it could still be
+   (equal hard-edged arcs; the list comes from the app as --ring-stops on the
+   card). Once the color is certain the whole face turns that color instead
+   (.card-<color> above).
 
    The ring is drawn on ::after, masked down to just the edge, so it never
    changes the card's size and never covers what's written on it. Its angle is
@@ -724,6 +759,10 @@ button:disabled {
   syntax: "<angle>";
   inherits: false;
   initial-value: 0deg;
+}
+
+.card-ring {
+  position: relative; /* the ring is drawn on ::after — other players' cards aren't positioned otherwise */
 }
 
 .card-ring::after {
@@ -738,9 +777,6 @@ button:disabled {
   mask: linear-gradient(#000 0 0) content-box, linear-gradient(#000 0 0);
   mask-composite: exclude;
   pointer-events: none;
-}
-
-.card-ring-spin::after {
   animation: card-ring-spin 3s linear infinite;
 }
 
@@ -751,7 +787,7 @@ button:disabled {
 }
 
 @media (prefers-reduced-motion: reduce) {
-  .card-ring-spin::after {
+  .card-ring::after {
     animation: none;
   }
 }
@@ -767,6 +803,20 @@ button:disabled {
   font-size: 0.55rem;
   text-decoration: line-through;
   opacity: 0.85;
+}
+
+/* The numbers a card has been ruled out for are now most of what an
+   unknown card has to show (no "?" placeholder, no card id), so they get
+   real size — three fit across a card's face, and a second row takes
+   the rest. */
+.not-row-numbers {
+  gap: 0.05rem 0.2rem;
+}
+
+.not-row-numbers .not-mark {
+  font-size: 0.75rem;
+  font-weight: 600;
+  line-height: 1.15;
 }
 
 .not-mark-white {
@@ -799,10 +849,21 @@ button:disabled {
   color: inherit;
 }
 
-.card-tag {
-  font-size: 0.58rem;
+/* A number the player *knows* is the biggest thing on their card — much
+   bigger than the small struck-through numbers a card has been ruled out
+   for, so the two can't be mixed up. Fits above the multicolor "M?" flag
+   without making the card any taller than its usual minimum. */
+.card-number {
+  font-size: 1.5rem;
+  font-weight: 700;
+  line-height: 1;
   color: inherit;
-  opacity: 0.75;
+}
+
+/* On a card whose color isn't known yet (dim text by default) a known number
+   is also the brightest thing on it, against the dim struck-through ones. */
+.card-unknown .card-number {
+  color: var(--paper);
 }
 
 .card-own[draggable="true"] {

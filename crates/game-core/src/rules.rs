@@ -228,6 +228,17 @@ impl GameRules {
         }
     }
 
+    /// Whether a color clue may be given even though it touches no card in
+    /// the target's hand. Ordinarily a clue has to touch something, but in
+    /// hanabii mode the three primary colors can always be given: a clue
+    /// that touches nothing still tells the target that none of their cards
+    /// contain that color, which is exactly as useful there as a hit — so
+    /// it's always available, at the usual cost of a clue token and a turn.
+    /// Number clues aren't affected: they must always touch a card.
+    pub fn allows_empty_color_clues(&self) -> bool {
+        self.hanabii
+    }
+
     /// Whether `clue` (a color or a number) touches `card` under these
     /// rules. Number clues are the same in every mode.
     pub fn clue_touches(&self, clue: Clue, card: Card) -> bool {
@@ -584,5 +595,13 @@ mod tests {
         }
         assert!(hanabii().clue_touches(Clue::Color(Color::Red), card));
         assert!(!GameRules::default().clue_touches(Clue::Color(Color::Red), card));
+    }
+
+    #[test]
+    fn only_hanabii_lets_a_color_clue_touch_nothing() {
+        assert!(hanabii().allows_empty_color_clues());
+        assert!(!GameRules::default().allows_empty_color_clues());
+        assert!(!GameRules { multicolor: true, black: true, extra_colors: 2, six_cards: true, ..Default::default() }
+            .allows_empty_color_clues());
     }
 }

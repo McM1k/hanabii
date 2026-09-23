@@ -14,8 +14,8 @@ enum Stage {
 /// The rules of the hanabii mode as shown in the box that appears when the
 /// page title is hovered: the clue rule first, then how your own cards show
 /// what you know.
-const HANABII_CLUE_RULES: &str = "Only red, yellow and blue can be clued. Orange is red + yellow, green is yellow + blue and purple is red + blue — so a red clue touches every red, orange and purple card, and so on.";
-const HANABII_CARD_MARKERS: &str = "On your own cards, a ring shows every color the card could still be — it spins on a card a clue touched — and the whole card fills in once its color is certain.";
+const HANABII_CLUE_RULES: &str = "Only red, yellow and blue can be clued — and always, even when a clue touches nothing, since ruling a color out is information too. Orange is red + yellow, green is yellow + blue and purple is red + blue, so a red clue touches every red, orange and purple card, and so on.";
+const HANABII_CARD_MARKERS: &str = "A spinning ring shows every color a card could still be — on your own cards, and on everyone else's so you can see what they know — and the whole card fills in once its color is certain.";
 
 #[component]
 pub fn App() -> impl IntoView {

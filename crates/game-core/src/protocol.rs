@@ -34,6 +34,9 @@ pub struct PlayerView {
     pub status: GameStatus,
     pub score: u8,
     pub last_moves: HashMap<PlayerId, LastMove>,
+    /// Who took the most recent turn (`None` before the first one) — so the
+    /// client can tell which entry of `last_moves` is the latest move.
+    pub last_actor: Option<PlayerId>,
     /// The variant rules this game was started with — lets the client know,
     /// for instance, which colors are actually in play, without having to
     /// infer it from `fireworks`' (arbitrarily-ordered) keys.
@@ -70,6 +73,7 @@ impl GameState {
             status: self.status,
             score: self.score(),
             last_moves: self.last_moves.clone(),
+            last_actor: self.last_actor,
             rules: self.rules,
         }
     }

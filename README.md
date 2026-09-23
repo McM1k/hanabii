@@ -225,18 +225,32 @@ the game is created).
   — and a clue touches every card whose color contains the named primary. So a red
   clue touches red, orange *and* purple cards; yellow touches yellow, orange and
   green; blue touches blue, green and purple. Number clues are unchanged.
+- **A primary is always cluable, even touching nothing:** ordinarily a clue that
+  touches no card is rejected, but in this mode all three primaries can always be
+  given (`GameRules::allows_empty_color_clues`) — "none of your cards contain red" is
+  exactly as informative as a hit, still costs a clue token and a turn, and every card
+  in the hand gets the corresponding miss recorded. The lobby's clue buttons reflect
+  this: all three primaries are always offered, whatever the target's hand holds.
 - **What a player knows about their own cards:** a red hit means "red, orange or
   purple", not "red", so hanabii mode keeps its evidence as primary-color results
   (`CardKnowledge::hit_primaries` / `missed_primaries`) instead of a claimed color.
-  While a card's color is uncertain it keeps a neutral face and gets a **ring made of
-  every color it could still be** (`CardKnowledge::hanabii_possible_colors`; equal
-  hard-edged arcs, drawn from the `--ring-stops` style the app sets on the card — see
-  `hanabii_ring` in `game_board.rs` and `.card-ring` in `style.css`). The ring **spins**
-  on a card a color clue has touched; a card that has only been *missed* by clues gets
-  the same ring standing still (a red miss leaves yellow, green and blue). Once the
-  clues leave a single possibility (red and yellow both hit → orange; red and yellow both
-  missed → blue) the whole card fills in with that color and the ring goes away. There
-  are no struck-through color marks in this mode: the ring already says everything.
+  While a card's color is uncertain it keeps a neutral face and gets a **spinning ring
+  made of every color it could still be** (`CardKnowledge::hanabii_possible_colors`;
+  equal hard-edged arcs, drawn from the `--ring-stops` style the app sets on the card —
+  see `hanabii_ring_colors` in `game_board.rs` and `.card-ring` in `style.css`). Clues
+  that *miss* a card narrow it down just as much as ones that touch it (a red miss
+  leaves yellow, green and blue), so every ring spins. Once the clues leave a single
+  possibility (red and yellow both hit → orange; red and yellow both missed → blue) the
+  whole card fills in with that color and the ring goes away. There are no struck-through
+  color marks in this mode: the ring already says everything.
+- **The ring shows on every hand, not just your own:** other players' cards still show
+  their true color as always, but now also carry the same ring their *owner* sees — so
+  before clueing, you can tell at a glance what that player still doesn't know, and
+  whether a clue would actually teach them anything.
+- **Clue buttons are painted to match:** each primary's button blends into its two
+  color-wheel neighbors at the edges — the colors that clue also touches — so the red
+  button reads mostly red with a sliver of purple and orange at the sides
+  (`clue_button_style` in `game_board.rs`).
 - **Page title:** while the mode is on (ticked in the lobby, or being played) the page
   title — and the browser tab — read "Hanabii", and hovering (or focusing/tapping) the
   title opens a box with the mode's rules. The game screen itself carries no hanabii
@@ -244,6 +258,23 @@ the game is created).
 - **Where the rules live:** `GameRules::color_clue_touches` / `clue_touches` are the
   single definition of what a clue touches, shared by the engine and the frontend's
   hover preview; `GameRules::cluable_colors` is what the clue buttons offer.
+
+## Every mode: the last card gets played
+
+The deck running out no longer ends the game outright. From the turn that draws the
+final card, every player — that drawer included — gets exactly one more turn
+(`GameState::final_turns_remaining`, counted down in `apply_action`), so the standard
+rule holds: whoever draws the last card still gets to do something with it before the
+game ends. `EndReason::DeckExhausted` fires once the countdown reaches zero, and losing
+all fuses or completing every firework still ends the game immediately even mid-countdown.
+
+## Every mode: what the latest clue touched
+
+`LastMove::Clue` now carries exactly which card ids a clue touched (`touched:
+Vec<CardId>`, replacing the old `touched_count`), and `GameState`/`PlayerView` record
+who took the most recent turn (`last_actor`). The frontend uses this to briefly
+highlight the touched cards — a white pulse, `.card-touched` — on *every* screen for a
+couple of seconds after the clue: the target's own hand and whoever gave it.
 
 ## Server protocol (v1)
 

@@ -334,4 +334,80 @@ mod tests {
         let json = serde_json::to_string(&GameRules { hanabii: true, ..Default::default() }).unwrap();
         assert!(serde_json::from_str::<GameRules>(&json).unwrap().hanabii);
     }
+
+    #[test]
+    fn a_hanabii_color_clue_that_touches_nothing_goes_through_the_server() {
+        use game_core::{Action, Card, Clue, LastMove};
+
+        let (room, ids, mut inboxes) = room_with_players(2);
+        handle_client_message(
+            &room,
+            ids[0],
+            ClientMessage::SetRules { rules: GameRules { hanabii: true, ..Default::default() } },
+        );
+        handle_client_message(&room, ids[0], ClientMessage::StartGame);
+
+        // Deal the second player a hand with no red in it.
+        {
+            let mut guard = room.lock().unwrap();
+            let game = guard.game.as_mut().expect("game started");
+            for hc in game.hands.get_mut(&ids[1]).unwrap().iter_mut() {
+                hc.card = Card { color: Color::Green, number: 1 };
+            }
+        }
+        for inbox in &mut inboxes {
+            while inbox.try_recv().is_ok() {}
+        }
+
+        handle_client_message(
+            &room,
+            ids[0],
+            ClientMessage::Action(Action::Clue { target: ids[1], clue: Clue::Color(Color::Red) }),
+        );
+
+        for inbox in &mut inboxes {
+            let mut latest = None;
+            while let Ok(msg) = inbox.try_recv() {
+                match msg {
+                    ServerMessage::ActionRejected { reason } => panic!("the clue was rejected: {reason}"),
+                    ServerMessage::StateUpdate(view) => latest = Some(view),
+                    _ => {}
+                }
+            }
+            let view = latest.expect("everyone gets the new state");
+            assert_eq!(view.last_actor, Some(ids[0]));
+            match &view.last_moves[&ids[0]] {
+                LastMove::Clue { touched, .. } => assert!(touched.is_empty()),
+                other => panic!("expected a clue, got {other:?}"),
+            }
+        }
+    }
+
+    #[test]
+    fn the_same_clue_in_an_ordinary_game_is_still_turned_away() {
+        use game_core::{Action, Card, Clue};
+
+        let (room, ids, mut inboxes) = room_with_players(2);
+        handle_client_message(&room, ids[0], ClientMessage::StartGame);
+        {
+            let mut guard = room.lock().unwrap();
+            let game = guard.game.as_mut().expect("game started");
+            for hc in game.hands.get_mut(&ids[1]).unwrap().iter_mut() {
+                hc.card = Card { color: Color::White, number: 1 };
+            }
+        }
+        for inbox in &mut inboxes {
+            while inbox.try_recv().is_ok() {}
+        }
+        handle_client_message(
+            &room,
+            ids[0],
+            ClientMessage::Action(Action::Clue { target: ids[1], clue: Clue::Color(Color::Red) }),
+        );
+        let mut rejected = false;
+        while let Ok(msg) = inboxes[0].try_recv() {
+            rejected |= matches!(msg, ServerMessage::ActionRejected { .. });
+        }
+        assert!(rejected, "an ordinary game must still refuse a clue that touches nothing");
+    }
 }

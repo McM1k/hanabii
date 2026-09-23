@@ -67,7 +67,11 @@ pub enum LastMove {
     Clue {
         target: PlayerId,
         clue: Clue,
-        touched_count: usize,
+        /// Exactly which of the target's cards the clue touched — public
+        /// information at a real table too, and what lets every player's
+        /// screen briefly point at them. Empty for a hanabii-mode color
+        /// clue that touched nothing.
+        touched: Vec<CardId>,
     },
     Play {
         card: Card,
@@ -160,7 +164,15 @@ pub struct GameState {
     pub fuse_tokens: u8,
     pub current_turn: usize,
     pub status: GameStatus,
-    pub final_round_starting_player: Option<usize>,
+    /// Set the moment the last card is drawn: how many more turns will be
+    /// played before the game ends — one for every player, *including the
+    /// one who drew that last card*, who gets to play it (the standard
+    /// rule). Counts down as those turns finish; the game is over when it
+    /// reaches zero. `None` until the deck runs out.
+    pub final_turns_remaining: Option<usize>,
+    /// Who took the most recent turn, if anyone has yet. Together with
+    /// `last_moves` this identifies "the latest move" for the UI.
+    pub last_actor: Option<PlayerId>,
     pub last_moves: HashMap<PlayerId, LastMove>,
     pub rules: GameRules,
     next_card_id: u32,
@@ -212,7 +224,8 @@ impl GameState {
             fuse_tokens: MAX_FUSE_TOKENS,
             current_turn: 0,
             status: GameStatus::InProgress,
-            final_round_starting_player: None,
+            final_turns_remaining: None,
+            last_actor: None,
             last_moves: HashMap::new(),
             rules,
             next_card_id,
@@ -239,13 +252,27 @@ impl GameState {
             return Err(ActionError::NotYourTurn);
         }
 
+        // Was the end-of-game countdown already running before this turn
+        // began? (Measured up front because *this* turn may be the one that
+        // draws the last card and starts it — that turn isn't one of the
+        // final turns, it's the one that triggers them.)
+        let countdown_already_running = self.final_turns_remaining.is_some();
+
         let mut events = match action {
             Action::Clue { target, clue } => self.apply_clue(player, target, clue)?,
             Action::Play { card_id } => self.apply_play(player, card_id)?,
             Action::Discard { card_id } => self.apply_discard(player, card_id)?,
         };
 
+        self.last_actor = Some(player);
         self.advance_turn();
+
+        if countdown_already_running {
+            // One of the final turns just finished.
+            if let Some(left) = self.final_turns_remaining.as_mut() {
+                *left = left.saturating_sub(1);
+            }
+        }
 
         if let Some(over) = self.check_game_over() {
             events.push(over);
@@ -308,7 +335,9 @@ impl GameState {
             .iter()
             .map(|hc| rules.clue_touches(clue, hc.card))
             .collect();
-        if !matches.iter().any(|&is_match| is_match) {
+        let may_touch_nothing =
+            matches!(clue, Clue::Color(_)) && rules.allows_empty_color_clues();
+        if !may_touch_nothing && !matches.iter().any(|&is_match| is_match) {
             return Err(ActionError::ClueMatchesNothing);
         }
 
@@ -327,7 +356,7 @@ impl GameState {
             LastMove::Clue {
                 target,
                 clue,
-                touched_count: touched.len(),
+                touched: touched.clone(),
             },
         );
 
@@ -433,16 +462,24 @@ impl GameState {
                 knowledge: CardKnowledge::default(),
             });
 
-            if self.draw_pile.is_empty() && self.final_round_starting_player.is_none() {
-                self.final_round_starting_player = Some(self.current_turn);
+            if self.draw_pile.is_empty() {
+                self.start_final_turns();
             }
 
             vec![Event::CardDrawn { player, card_id: id }]
         } else {
-            if self.final_round_starting_player.is_none() {
-                self.final_round_starting_player = Some(self.current_turn);
-            }
+            self.start_final_turns();
             vec![]
+        }
+    }
+
+    /// The deck has run out: from here every player gets exactly one more
+    /// turn, the player who drew the last card included (see
+    /// `final_turns_remaining`). Does nothing if the countdown is already
+    /// running.
+    fn start_final_turns(&mut self) {
+        if self.final_turns_remaining.is_none() {
+            self.final_turns_remaining = Some(self.players.len());
         }
     }
 
@@ -452,9 +489,9 @@ impl GameState {
 
     /// Checks and, if applicable, applies the game-over transition. Order
     /// matters: running out of fuses or completing every firework ends the
-    /// game immediately, even mid final-round; otherwise the final round
-    /// (one extra turn per player after the deck empties) has to actually
-    /// wrap back around to whoever drew the last card.
+    /// game immediately, even mid final-round; otherwise the game ends once
+    /// every player has had their one extra turn after the deck emptied —
+    /// the last of which belongs to whoever drew the final card.
     fn check_game_over(&mut self) -> Option<Event> {
         if self.status != GameStatus::InProgress {
             return None;
@@ -465,7 +502,7 @@ impl GameState {
             self.status = GameStatus::Finished(EndReason::FusesExhausted);
         } else if self.score() == max_score {
             self.status = GameStatus::Finished(EndReason::PerfectScore);
-        } else if self.final_round_starting_player == Some(self.current_turn) {
+        } else if self.final_turns_remaining == Some(0) {
             self.status = GameStatus::Finished(EndReason::DeckExhausted);
         }
 
@@ -1446,19 +1483,356 @@ mod tests {
     }
 
     #[test]
-    fn a_hanabii_clue_must_still_touch_at_least_one_card() {
+    fn a_hanabii_color_clue_may_touch_nothing_and_still_teaches_the_target() {
         let mut g = hanabii_game();
-        // Only green cards (yellow + blue): red touches none of them...
+        // Only green cards (yellow + blue): red touches none of them — but
+        // in hanabii mode the primaries can always be given, because "no
+        // red anywhere in your hand" is information too.
+        let ids = set_hand(&mut g, PlayerId(1), &[(Color::Green, 1); 5]);
+        let touched = touched_by(&mut g, PlayerId(0), PlayerId(1), Clue::Color(Color::Red));
+        assert!(touched.is_empty());
+
+        // It cost what any clue costs: a token and the turn.
+        assert_eq!(g.clue_tokens, MAX_CLUE_TOKENS - 1);
+        assert_eq!(g.current_player(), PlayerId(1));
+
+        // Every card was told "no red in you": red, orange and purple are
+        // out, and yellow, green and blue are what's left.
+        let rules = g.rules;
+        for id in ids {
+            let k = &g.hands[&PlayerId(1)].iter().find(|hc| hc.id == id).unwrap().knowledge;
+            assert!(k.missed_primaries.contains(&Color::Red));
+            assert!(k.hit_primaries.is_empty());
+            assert_eq!(
+                k.hanabii_possible_colors(&rules),
+                vec![Color::Yellow, Color::Green, Color::Blue]
+            );
+        }
+
+        // ...and the move is on record, touching nobody.
+        match &g.last_moves[&PlayerId(0)] {
+            LastMove::Clue { target, clue, touched } => {
+                assert_eq!((*target, *clue), (PlayerId(1), Clue::Color(Color::Red)));
+                assert!(touched.is_empty());
+            }
+            other => panic!("expected a clue, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn every_primary_can_be_given_to_any_hand_in_hanabii_mode() {
+        // Whatever the hand holds, red, yellow and blue are all accepted.
+        for hand_color in [Color::Red, Color::Orange, Color::Yellow, Color::Green, Color::Blue, Color::Purple] {
+            for primary in Color::PRIMARIES {
+                let mut g = hanabii_game();
+                set_hand(&mut g, PlayerId(1), &[(hand_color, 1); 5]);
+                let result = g.apply_action(
+                    PlayerId(0),
+                    Action::Clue { target: PlayerId(1), clue: Clue::Color(primary) },
+                );
+                assert!(result.is_ok(), "{primary:?} clue to a hand of {hand_color:?}: {result:?}");
+            }
+        }
+    }
+
+    #[test]
+    fn an_empty_hanabii_clue_still_needs_a_clue_token() {
+        let mut g = hanabii_game();
         set_hand(&mut g, PlayerId(1), &[(Color::Green, 1); 5]);
+        g.clue_tokens = 0;
+        let result = g.apply_action(
+            PlayerId(0),
+            Action::Clue { target: PlayerId(1), clue: Clue::Color(Color::Red) },
+        );
+        assert_eq!(result.unwrap_err(), ActionError::NoClueTokens);
+    }
+
+    #[test]
+    fn a_hanabii_number_clue_must_still_touch_a_card() {
+        let mut g = hanabii_game();
+        set_hand(&mut g, PlayerId(1), &[(Color::Green, 1); 5]);
+        let result = g.apply_action(
+            PlayerId(0),
+            Action::Clue { target: PlayerId(1), clue: Clue::Number(6) },
+        );
+        assert_eq!(result.unwrap_err(), ActionError::ClueMatchesNothing);
+        // Rejected without a trace.
+        assert_eq!(g.clue_tokens, MAX_CLUE_TOKENS);
+        assert_eq!(g.current_player(), PlayerId(0));
+        assert!(g.hands[&PlayerId(1)].iter().all(|hc| hc.knowledge == CardKnowledge::default()));
+    }
+
+    #[test]
+    fn ordinary_games_still_reject_a_color_clue_that_touches_nothing() {
+        let mut g = two_player_game();
+        for hc in g.hands.get_mut(&PlayerId(1)).unwrap().iter_mut() {
+            hc.card = Card { color: Color::White, number: 2 };
+        }
         let result = g.apply_action(
             PlayerId(0),
             Action::Clue { target: PlayerId(1), clue: Clue::Color(Color::Red) },
         );
         assert_eq!(result.unwrap_err(), ActionError::ClueMatchesNothing);
+    }
 
-        // ...but yellow and blue both touch all of them.
-        let all = touched_by(&mut g, PlayerId(0), PlayerId(1), Clue::Color(Color::Yellow));
-        assert_eq!(all.len(), 5);
+    // --- the latest move, and which cards a clue touched -----------------
+
+    #[test]
+    fn a_clue_records_exactly_which_cards_it_touched_and_who_took_the_turn() {
+        let mut g = two_player_game();
+        assert_eq!(g.last_actor, None);
+        let ids = set_hand(
+            &mut g,
+            PlayerId(1),
+            &[
+                (Color::Red, 1),
+                (Color::Blue, 2),
+                (Color::Red, 3),
+                (Color::Green, 4),
+                (Color::White, 5),
+            ],
+        );
+        let touched = touched_by(&mut g, PlayerId(0), PlayerId(1), Clue::Color(Color::Red));
+        assert_eq!(touched, vec![ids[0], ids[2]]);
+
+        assert_eq!(g.last_actor, Some(PlayerId(0)));
+        match &g.last_moves[&PlayerId(0)] {
+            LastMove::Clue { touched: recorded, .. } => assert_eq!(recorded, &touched),
+            other => panic!("expected a clue, got {other:?}"),
+        }
+        // Every player's view says the same thing.
+        for viewer in [PlayerId(0), PlayerId(1)] {
+            assert_eq!(g.view_for(viewer).last_actor, Some(PlayerId(0)));
+        }
+    }
+
+    #[test]
+    fn hanabii_clues_record_the_mixed_color_cards_they_touched_too() {
+        let mut g = hanabii_game();
+        let ids = set_hand(
+            &mut g,
+            PlayerId(1),
+            &[
+                (Color::Red, 1),
+                (Color::Orange, 2),
+                (Color::Purple, 3),
+                (Color::Yellow, 4),
+                (Color::Green, 5),
+            ],
+        );
+        touched_by(&mut g, PlayerId(0), PlayerId(1), Clue::Color(Color::Red));
+        match &g.last_moves[&PlayerId(0)] {
+            LastMove::Clue { touched, .. } => assert_eq!(touched, &vec![ids[0], ids[1], ids[2]]),
+            other => panic!("expected a clue, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn plays_and_discards_update_the_latest_actor_too() {
+        let mut g = two_player_game();
+        let id = g.hands[&PlayerId(0)][0].id;
+        g.apply_action(PlayerId(0), Action::Play { card_id: id }).unwrap();
+        assert_eq!(g.last_actor, Some(PlayerId(0)));
+        let id = g.hands[&PlayerId(1)][0].id;
+        g.apply_action(PlayerId(1), Action::Play { card_id: id }).unwrap();
+        assert_eq!(g.last_actor, Some(PlayerId(1)));
+    }
+
+    // --- the final turns after the deck runs out ---------------------------
+
+    /// A legal clue for `from` to give `target`: a number one of the target's
+    /// cards carries.
+    fn some_number_clue(g: &GameState, target: PlayerId) -> Action {
+        Action::Clue {
+            target,
+            clue: Clue::Number(g.hands[&target][0].card.number),
+        }
+    }
+
+    fn last_drawn(events: &[Event]) -> CardId {
+        events
+            .iter()
+            .find_map(|e| match e {
+                Event::CardDrawn { card_id, .. } => Some(*card_id),
+                _ => None,
+            })
+            .expect("the action should have drawn a card")
+    }
+
+    #[test]
+    fn the_player_who_draws_the_last_card_gets_a_final_turn_to_play_it() {
+        let mut g = two_player_game();
+        g.fuse_tokens = 5; // room for a few misplays without ending the game
+        g.draw_pile.truncate(1);
+        assert_eq!(g.final_turns_remaining, None);
+
+        // Player 0 plays a card and draws the very last one from the deck.
+        let id = g.hands[&PlayerId(0)][0].id;
+        let events = g.apply_action(PlayerId(0), Action::Play { card_id: id }).unwrap();
+        let drawn = last_drawn(&events);
+        assert!(g.draw_pile.is_empty());
+
+        // That starts the countdown: one more turn for each of the two
+        // players — player 1 first, then player 0 again. The turn that drew
+        // the card doesn't count as one of them.
+        assert_eq!(g.final_turns_remaining, Some(2));
+        assert_eq!(g.status, GameStatus::InProgress);
+        assert_eq!(g.current_player(), PlayerId(1));
+
+        // Player 1's final turn.
+        let clue = some_number_clue(&g, PlayerId(0));
+        g.apply_action(PlayerId(1), clue).unwrap();
+        assert_eq!(g.final_turns_remaining, Some(1));
+        assert_eq!(g.status, GameStatus::InProgress);
+
+        // It's player 0's turn again — and the card they just drew is
+        // theirs to play.
+        assert_eq!(g.current_player(), PlayerId(0));
+        assert!(g.hands[&PlayerId(0)].iter().any(|hc| hc.id == drawn));
+        g.apply_action(PlayerId(0), Action::Play { card_id: drawn }).unwrap();
+
+        // Only now is the game over.
+        assert_eq!(g.final_turns_remaining, Some(0));
+        assert_eq!(g.status, GameStatus::Finished(EndReason::DeckExhausted));
+        assert_eq!(
+            g.apply_action(PlayerId(1), Action::Play { card_id: g.hands[&PlayerId(1)][0].id })
+                .unwrap_err(),
+            ActionError::GameOver
+        );
+    }
+
+    #[test]
+    fn the_final_turns_go_round_the_whole_table_ending_with_the_player_who_drew() {
+        let mut g = GameState::new(3, 21, GameRules::default());
+        g.fuse_tokens = 5;
+        g.draw_pile.truncate(1);
+
+        // Player 0 draws the last card.
+        let id = g.hands[&PlayerId(0)][0].id;
+        g.apply_action(PlayerId(0), Action::Play { card_id: id }).unwrap();
+        assert_eq!(g.final_turns_remaining, Some(3));
+
+        // Players 1 and 2 each get one more turn...
+        let clue = some_number_clue(&g, PlayerId(2));
+        g.apply_action(PlayerId(1), clue).unwrap();
+        assert_eq!((g.final_turns_remaining, g.status), (Some(2), GameStatus::InProgress));
+        let clue = some_number_clue(&g, PlayerId(0));
+        g.apply_action(PlayerId(2), clue).unwrap();
+        assert_eq!((g.final_turns_remaining, g.status), (Some(1), GameStatus::InProgress));
+
+        // ...and then it's back to player 0, whose turn is the last one.
+        assert_eq!(g.current_player(), PlayerId(0));
+        let id = g.hands[&PlayerId(0)][0].id;
+        g.apply_action(PlayerId(0), Action::Play { card_id: id }).unwrap();
+        assert_eq!(g.status, GameStatus::Finished(EndReason::DeckExhausted));
+    }
+
+    #[test]
+    fn the_countdown_starts_once_and_keeps_going_while_nobody_can_draw() {
+        let mut g = two_player_game();
+        g.fuse_tokens = 5;
+        g.draw_pile.truncate(1);
+
+        let id = g.hands[&PlayerId(0)][0].id;
+        g.apply_action(PlayerId(0), Action::Play { card_id: id }).unwrap();
+        assert_eq!(g.final_turns_remaining, Some(2));
+
+        // Player 1 plays a card: there's nothing left to draw, which must
+        // not restart the countdown.
+        let id = g.hands[&PlayerId(1)][0].id;
+        g.apply_action(PlayerId(1), Action::Play { card_id: id }).unwrap();
+        assert_eq!(g.final_turns_remaining, Some(1));
+        assert_eq!(g.hands[&PlayerId(1)].len(), 4, "no replacement card to draw");
+    }
+
+    #[test]
+    fn no_countdown_runs_while_there_are_still_cards_to_draw() {
+        let mut g = two_player_game();
+        g.fuse_tokens = 5;
+        assert!(g.draw_pile.len() > 2);
+        let id = g.hands[&PlayerId(0)][0].id;
+        g.apply_action(PlayerId(0), Action::Play { card_id: id }).unwrap();
+        assert_eq!(g.final_turns_remaining, None);
+        // One card left after a draw: still not empty, still no countdown.
+        g.draw_pile.truncate(2);
+        let id = g.hands[&PlayerId(1)][0].id;
+        g.apply_action(PlayerId(1), Action::Play { card_id: id }).unwrap();
+        assert_eq!(g.draw_pile.len(), 1);
+        assert_eq!(g.final_turns_remaining, None);
+    }
+
+    #[test]
+    fn running_out_of_fuses_still_ends_the_game_at_once_during_the_final_turns() {
+        let mut g = two_player_game();
+        g.draw_pile.truncate(1);
+        g.fuse_tokens = 5;
+        let id = g.hands[&PlayerId(0)][0].id;
+        g.apply_action(PlayerId(0), Action::Play { card_id: id }).unwrap();
+        assert_eq!(g.final_turns_remaining, Some(2));
+
+        // Player 1 misplays their last fuse: over immediately, without
+        // waiting for player 0's final turn.
+        g.fuse_tokens = 1;
+        g.fireworks.insert(Color::White, 5); // nothing in hand can be played on top
+        let id = g.hands[&PlayerId(1)][0].id;
+        g.hands.get_mut(&PlayerId(1)).unwrap()[0].card = Card { color: Color::Red, number: 5 };
+        g.apply_action(PlayerId(1), Action::Play { card_id: id }).unwrap();
+        assert_eq!(g.status, GameStatus::Finished(EndReason::FusesExhausted));
+    }
+
+    #[test]
+    fn a_full_random_game_always_gives_the_drawer_of_the_last_card_a_final_turn() {
+        // Plays whole games to the end of the deck with a deterministic
+        // pseudo-random player and checks the shape of the ending every
+        // time: the game only ends by deck exhaustion after exactly one
+        // more turn for every seat, the last of which is the player who
+        // drew the final card.
+        let mut deck_endings = 0;
+        for seed in 0..80u64 {
+            let mut rng = seed.wrapping_mul(0x9E37_79B9_7F4A_7C15) ^ 0xA5A5_5A5A_1234_4321;
+            let mut next = move || {
+                rng ^= rng << 13;
+                rng ^= rng >> 7;
+                rng ^= rng << 17;
+                rng
+            };
+            let players = 2 + (seed % 4) as u8;
+            let mut g = GameState::new(players, seed, GameRules::default());
+            g.fuse_tokens = 200; // fuses shouldn't be what ends these games
+            let mut drawer: Option<PlayerId> = None;
+            let mut turns_since_draw = 0;
+
+            for _ in 0..500 {
+                if g.status != GameStatus::InProgress {
+                    break;
+                }
+                let me = g.current_player();
+                let cards: Vec<CardId> = g.hands[&me].iter().map(|hc| hc.id).collect();
+                // Mostly discards (they refund clues and never risk a fuse), some plays.
+                let action = if next() % 4 == 0 || g.clue_tokens >= MAX_CLUE_TOKENS {
+                    Action::Play { card_id: cards[(next() as usize) % cards.len()] }
+                } else {
+                    Action::Discard { card_id: cards[(next() as usize) % cards.len()] }
+                };
+                let was_counting = g.final_turns_remaining.is_some();
+                let events = g.apply_action(me, action).unwrap();
+                if !was_counting && g.final_turns_remaining.is_some() {
+                    drawer = Some(me);
+                    assert!(events.iter().any(|e| matches!(e, Event::CardDrawn { .. })));
+                    assert!(g.draw_pile.is_empty());
+                } else if was_counting {
+                    turns_since_draw += 1;
+                    if g.status == GameStatus::Finished(EndReason::DeckExhausted) {
+                        assert_eq!(turns_since_draw, players as usize, "seed {seed}");
+                        assert_eq!(Some(me), drawer, "seed {seed}: the drawer takes the very last turn");
+                        deck_endings += 1;
+                    } else {
+                        assert!(turns_since_draw < players as usize, "seed {seed}");
+                    }
+                }
+            }
+        }
+        assert!(deck_endings >= 40, "only {deck_endings} of 80 games ran the deck out");
     }
 
     #[test]
