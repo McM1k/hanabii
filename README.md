@@ -5,8 +5,8 @@ Axum for the server, Leptos (WASM) for the frontend, WebSockets tying them toget
 
 ## Status
 
-- [x] `game-core` — the rules engine. Compiler-verified, 119/119 tests passing.
-- [x] `server` — Axum + WebSockets, room management. Compiler-verified, 12/12 tests
+- [x] `game-core` — the rules engine. Compiler-verified, 133/133 tests passing.
+- [x] `server` — Axum + WebSockets, room management. Compiler-verified, 14/14 tests
       passing, join flow tested manually.
 - [x] `frontend` — Leptos UI. Compiler-verified every round (zero errors, zero
       warnings) via a sandbox-only dependency-pinning workaround (see
@@ -274,7 +274,15 @@ all fuses or completing every firework still ends the game immediately even mid-
 Vec<CardId>`, replacing the old `touched_count`), and `GameState`/`PlayerView` record
 who took the most recent turn (`last_actor`). The frontend uses this to briefly
 highlight the touched cards — a white pulse, `.card-touched` — on *every* screen for a
-couple of seconds after the clue: the target's own hand and whoever gave it.
+couple of seconds after the clue: the target's own hand and whoever gave it. The same
+window, driven by the same signal and clear-timer, also shows a small **replica of the
+exact clue button that was clicked** to the right of the receiving player's hand
+(`.received-clue`, `clue_image`/`clue_image_parts` in `game_board.rs`) — the same
+gradient for a color clue in hanabii mode, the same plain look for a number or an
+ordinary-game color clue — on both the receiver's own screen and whoever gave it. It's
+a real (but inert — no listeners, out of tab order, `pointer-events: none`) `<button>`
+sharing the clue button's own classes and inline style, so it can never visually drift
+from what the actual button looks like.
 
 ## Server protocol (v1)
 

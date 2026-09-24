@@ -210,6 +210,43 @@ fn ring_stops_style(colors: &[Color]) -> String {
     format!("--ring-stops: {}", stops.join(", "))
 }
 
+/// The `(class, style, label)` a clue button for `clue` renders with —
+/// factored out of the real button so `clue_image` (the small inert replica
+/// shown next to a hand that just received a clue) can reuse the exact same
+/// look without duplicating the logic, and so the look itself is unit
+/// testable without a DOM. For a color this is `clue_button_style`'s
+/// gradient (or nothing, outside hanabii mode, same as the real button);
+/// for a number there's no inline style at all — same as the real button,
+/// which relies on the plain `button { background: var(--ember); }` rule.
+fn clue_image_parts(clue: Clue, rules: &GameRules) -> (String, String, String) {
+    match clue {
+        Clue::Color(color) => (
+            format!("clue-btn clue-image card-{}", color_class(color)),
+            clue_button_style(rules, color),
+            format!("{color:?}"),
+        ),
+        Clue::Number(n) => ("clue-btn clue-image".to_string(), String::new(), n.to_string()),
+    }
+}
+
+/// A small, non-interactive copy of the clue button for `clue` — same
+/// classes and inline style as the real, clickable one (so it's pixel-for-
+/// pixel the same color/gradient), just inert: no listeners, out of the tab
+/// order, and `.clue-image` sets `pointer-events: none` so it can never be
+/// mistaken for something to click. A real `<button>` rather than a `<span>`
+/// specifically so it picks up the exact same CSS (in particular the plain
+/// `button { background: var(--ember); }` rule a number clue relies on) —
+/// deliberately *not* `disabled`, since `button:disabled` is styled quite
+/// differently and would defeat the point of an exact replica.
+fn clue_image(clue: Clue, rules: &GameRules) -> impl IntoView {
+    let (class, style, label) = clue_image_parts(clue, rules);
+    view! {
+        <button type="button" class=class style=style tabindex="-1">
+            {label}
+        </button>
+    }
+}
+
 /// All seated players, starting from whoever's turn it is right now and
 /// wrapping around in normal turn order. This is what lets the hand list
 /// show "who plays when" just by reading top to bottom.
@@ -516,6 +553,13 @@ fn ready_board(
     // changed since the last state this browser saw; the very first state
     // (the initial deal, or joining/refreshing mid-game) is never "new".
     let (touched_flash, set_touched_flash) = create_signal(HashSet::<CardId>::new());
+    // The clue most recently given, and who received it: drives a small
+    // replica of the clue button (see `clue_image`) shown next to that
+    // player's hand. Shares the exact same window and clear-timer as
+    // `touched_flash` below — set and cleared together, by the same effect
+    // and the same generation-guarded timeout — so the flash and the badge
+    // always appear and disappear in lockstep.
+    let (last_clue_badge, set_last_clue_badge) = create_signal(None::<(PlayerId, Clue)>);
     {
         let last_seen_turn: Rc<Cell<Option<PlayerId>>> = Rc::new(Cell::new(None));
         let flash_generation: Rc<Cell<u32>> = Rc::new(Cell::new(0));
@@ -529,15 +573,23 @@ fn ready_board(
             // Whatever was flashing belongs to a move that's over now.
             let generation = flash_generation.get().wrapping_add(1);
             flash_generation.set(generation);
-            let touched: HashSet<CardId> = match view
+            let (touched, badge): (HashSet<CardId>, Option<(PlayerId, Clue)>) = match view
                 .last_actor
                 .and_then(|actor| view.last_moves.get(&actor))
             {
-                Some(LastMove::Clue { touched, .. }) => touched.iter().copied().collect(),
-                _ => HashSet::new(),
+                Some(LastMove::Clue { target, clue, touched }) => {
+                    (touched.iter().copied().collect(), Some((*target, *clue)))
+                }
+                _ => (HashSet::new(), None),
             };
-            let flashing = !touched.is_empty();
+            // Whether a clue was given at all, not whether it touched
+            // anything — hanabii mode allows a clue that touches nothing
+            // (see `GameRules::allows_empty_color_clues`), and "none of
+            // your cards are red" is still real information the receiving
+            // player just got, worth badging even with nothing to flash.
+            let flashing = badge.is_some();
             set_touched_flash.set(touched);
+            set_last_clue_badge.set(badge);
 
             if flashing {
                 let flash_generation = flash_generation.clone();
@@ -546,6 +598,7 @@ fn ready_board(
                         // Only clear our own flash, not a newer one's.
                         if flash_generation.get() == generation {
                             set_touched_flash.set(HashSet::new());
+                            set_last_clue_badge.set(None);
                         }
                     },
                     std::time::Duration::from_millis(TOUCHED_FLASH_MS),
@@ -869,6 +922,24 @@ fn ready_board(
                             })
                         };
 
+                        // A brief replica of the clue button this hand's owner was
+                        // just given, shown for as long as `last_clue_badge` holds
+                        // it (see the shared effect above) — on every screen, not
+                        // just the receiver's own, so whoever's about to clue next
+                        // can also see what this player was just told.
+                        let received_clue_badge = move || {
+                            let (target, clue) = last_clue_badge.get()?;
+                            if target != pid {
+                                return None;
+                            }
+                            let rules = ctx.view.get()?.rules;
+                            Some(view! {
+                                <div class="received-clue" title="What this player was just told">
+                                    {clue_image(clue, &rules)}
+                                </div>
+                            })
+                        };
+
                         let card_items = move || {
                             let Some(view) = ctx.view.get() else {
                                 return Vec::<View>::new().into_view();
@@ -1189,6 +1260,7 @@ fn ready_board(
                                         </div>
                                         <ul class="cards">{card_items}</ul>
                                     </div>
+                                    {received_clue_badge}
                                 </div>
                             }
                             .into_view()
@@ -1212,6 +1284,7 @@ fn ready_board(
                                         </div>
                                         <ul class="cards">{card_items}</ul>
                                     </div>
+                                    {received_clue_badge}
                                     {clue_section}
                                 </div>
                             }
@@ -1534,5 +1607,61 @@ mod tests {
         assert_eq!(join_with_and(&names(&["red"])), "red");
         assert_eq!(join_with_and(&names(&["red", "blue"])), "red and blue");
         assert_eq!(join_with_and(&names(&["red", "orange", "purple"])), "red, orange and purple");
+    }
+
+    #[test]
+    fn a_hanabii_color_badge_matches_the_real_buttons_class_and_gradient() {
+        let rules = hanabii();
+        for color in [Color::Red, Color::Yellow, Color::Blue] {
+            let (class, style, label) = clue_image_parts(Clue::Color(color), &rules);
+            // Same class the real button gets, plus the inert marker, and
+            // the exact same gradient string the button's own style uses.
+            assert_eq!(class, format!("clue-btn clue-image card-{}", color_class(color)));
+            assert_eq!(style, clue_button_style(&rules, color));
+            assert!(!style.is_empty(), "hanabii buttons always carry a gradient");
+            assert_eq!(label, format!("{color:?}"));
+        }
+    }
+
+    #[test]
+    fn an_ordinary_color_badge_has_no_inline_style_same_as_its_button() {
+        let rules = GameRules::default();
+        let (class, style, label) = clue_image_parts(Clue::Color(Color::Blue), &rules);
+        assert_eq!(class, "clue-btn clue-image card-blue");
+        // Outside hanabii mode the real button has no inline style either —
+        // it's colored entirely by the plain `.card-blue` class rule.
+        assert_eq!(style, clue_button_style(&rules, Color::Blue));
+        assert_eq!(style, "");
+        assert_eq!(label, "Blue");
+    }
+
+    #[test]
+    fn a_number_badge_has_the_plain_clue_btn_class_no_style_and_the_digit() {
+        for rules in [GameRules::default(), hanabii()] {
+            let (class, style, label) = clue_image_parts(Clue::Number(4), &rules);
+            // No color class — relies on the same plain `button` background
+            // the real number clue button does.
+            assert_eq!(class, "clue-btn clue-image");
+            assert_eq!(style, "");
+            assert_eq!(label, "4");
+        }
+    }
+
+    #[test]
+    fn every_primary_and_every_number_round_trips_through_clue_image_parts() {
+        // A broad sweep, rather than hand-picked cases: whatever the real
+        // clue button would look like, the badge's (class, style) always
+        // matches it exactly.
+        let rules = hanabii();
+        for color in Color::PRIMARIES {
+            let (_, style, _) = clue_image_parts(Clue::Color(color), &rules);
+            assert_eq!(style, clue_button_style(&rules, color));
+        }
+        for n in 1..=6u8 {
+            let (class, style, label) = clue_image_parts(Clue::Number(n), &rules);
+            assert_eq!(class, "clue-btn clue-image");
+            assert_eq!(style, "");
+            assert_eq!(label, n.to_string());
+        }
     }
 }

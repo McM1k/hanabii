@@ -593,6 +593,27 @@ button:disabled {
   border-left: 1px solid var(--night-softer);
 }
 
+/* The small "what this player was just told" replica shown to the right of
+   a hand that just received a clue — see `clue_image`/`received_clue_badge`
+   in game_board.rs. Same left-border treatment as .clue-options, so on a
+   hand that's both showing this *and* selected as a clue target, the two
+   read as clearly separate zones rather than a jumble. */
+.received-clue {
+  flex-shrink: 0;
+  display: flex;
+  align-items: center;
+  padding-left: 0.9rem;
+  border-left: 1px solid var(--night-softer);
+  animation: badge-pop 0.35s ease-out;
+}
+
+/* An exact visual copy of the clue button that was clicked — purely
+   decorative, not a real control. */
+.clue-image {
+  pointer-events: none;
+  cursor: default;
+}
+
 .clue-buttons {
   display: flex;
   flex-wrap: wrap;
